@@ -88,7 +88,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v31";
+const APP_VERSION = "v32";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [] };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -1126,7 +1126,7 @@ function AddFreteModal({ onClose, onSave }) {
               <span className="text-xs">JPG, PNG ou PDF</span>
             </button>
           )}
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" className="hidden"
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
                  onChange={(e) => handleFile(e.target.files?.[0])} />
 
           {step === "extracting" && (
@@ -1300,7 +1300,7 @@ function AddCustoModal({ onClose, onSave, freteIdFixo, fretesDisponiveis, custos
               </button>
             </>
           )}
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" className="hidden"
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
                  onChange={(e) => handleFile(e.target.files?.[0])} />
 
           {step === "extracting" && (
@@ -1790,7 +1790,7 @@ function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm }) 
               </button>
             </>
           )}
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" className="hidden"
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
                  onChange={(e) => handleFile(e.target.files?.[0])} />
 
           {step === "extracting" && (
@@ -1934,7 +1934,7 @@ function ParcelaPagamentoModal({ parcela, indice, onClose, onConfirm }) {
               </button>
             </>
           )}
-          <input ref={fileRef} type="file" accept="image/*,application/pdf" capture="environment" className="hidden"
+          <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
                  onChange={(e) => handleFile(e.target.files?.[0])} />
 
           {step === "extracting" && (
