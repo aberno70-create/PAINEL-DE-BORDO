@@ -88,7 +88,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v30";
+const APP_VERSION = "v31";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [] };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -2718,7 +2718,24 @@ function ControleFretes() {
       setDropboxConectado(true);
       try {
         const dados = await dropboxLerDados();
-        if (dados) {
+        const dropboxTemDados = dados && ((dados.fretes && dados.fretes.length) || (dados.custos && dados.custos.length));
+        const navegadorTemDados = fretes.length > 0 || custos.length > 0;
+        if (dropboxTemDados && navegadorTemDados) {
+          const usarDoDropbox = window.confirm(
+            `Encontrei dados nos dois lugares:\n\n` +
+            `• No Dropbox: ${(dados.fretes || []).length} fretes e ${(dados.custos || []).length} custos` +
+            `${dados.salvoEm ? " (salvo em " + new Date(dados.salvoEm).toLocaleString("pt-BR") + ")" : ""}.\n` +
+            `• Aberto agora neste navegador: ${fretes.length} fretes e ${custos.length} custos.\n\n` +
+            "OK = usar os dados DO DROPBOX (substitui o que está aberto agora no navegador).\n" +
+            "Cancelar = manter o que está aberto agora no navegador (substitui o arquivo do Dropbox por estes dados)."
+          );
+          if (usarDoDropbox) {
+            if (dados.fretes) setFretes(dados.fretes);
+            if (dados.custos) setCustos(dados.custos);
+            if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.config) atualizarConfig(dados.config);
+          }
+        } else if (dropboxTemDados && !navegadorTemDados) {
           if (dados.fretes) setFretes(dados.fretes);
           if (dados.custos) setCustos(dados.custos);
           if (dados.creditos) setCreditos(dados.creditos);
@@ -2785,11 +2802,18 @@ function ControleFretes() {
       const handle = await window.showDirectoryPicker({ mode: "readwrite" });
       await idbSalvarPasta(handle);
       const dados = await pastaLerDados(handle);
-      if (dados && (dados.fretes || dados.custos)) {
+      const pastaTemDados = dados && ((dados.fretes && dados.fretes.length) || (dados.custos && dados.custos.length));
+      const navegadorTemDados = fretes.length > 0 || custos.length > 0;
+      if (pastaTemDados && navegadorTemDados) {
+        // Os dois lados têm lançamentos — nunca decide sozinho qual usar; mostra quantos tem
+        // de cada lado para a escolha ser informada, não um "OK ou Cancelar" às cegas.
         const usarDaPasta = window.confirm(
-          `Já existe um arquivo de dados nesta pasta${dados.salvoEm ? " (salvo em " + new Date(dados.salvoEm).toLocaleString("pt-BR") + ")" : ""}.\n\n` +
-          "OK = carregar os dados dessa pasta (substitui o que está aberto agora neste navegador).\n" +
-          "Cancelar = manter os dados atuais deste navegador e gravá-los nessa pasta, substituindo o arquivo que já existia lá."
+          `Encontrei dados nos dois lugares:\n\n` +
+          `• Nesta pasta: ${(dados.fretes || []).length} fretes e ${(dados.custos || []).length} custos` +
+          `${dados.salvoEm ? " (salvo em " + new Date(dados.salvoEm).toLocaleString("pt-BR") + ")" : ""}.\n` +
+          `• Aberto agora neste navegador: ${fretes.length} fretes e ${custos.length} custos.\n\n` +
+          "OK = usar os dados DESTA PASTA (substitui o que está aberto agora no navegador).\n" +
+          "Cancelar = manter o que está aberto agora no navegador (substitui o arquivo da pasta por estes dados)."
         );
         if (usarDaPasta) {
           if (dados.fretes) setFretes(dados.fretes);
@@ -2797,7 +2821,16 @@ function ControleFretes() {
           if (dados.creditos) setCreditos(dados.creditos);
           if (dados.config) atualizarConfig(dados.config);
         }
+      } else if (pastaTemDados && !navegadorTemDados) {
+        // Navegador está vazio e a pasta já tem dados de verdade — carrega sem perguntar,
+        // não há nada no navegador que se perderia com isso.
+        if (dados.fretes) setFretes(dados.fretes);
+        if (dados.custos) setCustos(dados.custos);
+        if (dados.creditos) setCreditos(dados.creditos);
+        if (dados.config) atualizarConfig(dados.config);
       }
+      // Se a pasta estiver vazia (ou sem arquivo ainda), não pergunta nada — só passa a
+      // gravar o que já está aberto no navegador a partir de agora.
       setPastaCarregada(true);
       setPastaHandle(handle);
       setPastaNome(handle.name);
