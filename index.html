@@ -88,8 +88,8 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v32";
-const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [] };
+const APP_VERSION = "v33";
+const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
 
@@ -205,6 +205,16 @@ const LS_DROPBOX = {
   verifier: "gvgs_dropbox_pkce_verifier" // só usado durante o login, removido depois
 };
 const NOME_ARQUIVO_DROPBOX = "/painel-de-bordo-dados.json";
+
+// App Key do app do Dropbox da GVGS. É pública por natureza: no fluxo PKCE não existe
+// "client secret" no navegador, então deixar fixa aqui não expõe nada — só evita ter que
+// digitar de novo a cada versão nova do arquivo.
+const DROPBOX_APP_KEY_PADRAO = "605q5upo3xlsfyq";
+try {
+  if (!localStorage.getItem(LS_DROPBOX.appKey)) {
+    localStorage.setItem(LS_DROPBOX.appKey, DROPBOX_APP_KEY_PADRAO);
+  }
+} catch (e) { /* navegador sem localStorage — segue sem travar */ }
 
 function dropboxGerarVerifier() {
   const bytes = new Uint8Array(64);
@@ -620,8 +630,24 @@ const ConfigContext = React.createContext({ config: DEFAULT_CONFIG, atualizarCon
 function useConfig() { return React.useContext(ConfigContext); }
 
 function ConfigProvider({ children }) {
-  const [config, setConfig] = useState(() => loadConfig());
+  const [config, setConfig] = useState(() => {
+    const inicial = loadConfig();
+    // Se as credenciais já vieram junto com os dados numa sessão anterior, devolve
+    // elas para o localStorage antes do app começar a usar.
+    try {
+      if (inicial && inicial.apiKey) localStorage.setItem(LS_KEYS.apiKey, inicial.apiKey);
+      if (inicial && inicial.dropboxAppKey) localStorage.setItem(LS_DROPBOX.appKey, inicial.dropboxAppKey);
+    } catch (e) { /* sem localStorage — segue */ }
+    return inicial;
+  });
   const atualizarConfig = (novo) => {
+    // As credenciais viajam dentro do arquivo de dados (Dropbox / pasta conectada).
+    // Assim, ao abrir uma versão nova do app, basta conectar o Dropbox uma vez que a
+    // chave da API volta junto com os lançamentos — não precisa digitar de novo.
+    try {
+      if (novo && novo.apiKey) localStorage.setItem(LS_KEYS.apiKey, novo.apiKey);
+      if (novo && novo.dropboxAppKey) localStorage.setItem(LS_DROPBOX.appKey, novo.dropboxAppKey);
+    } catch (e) { /* sem localStorage — segue */ }
     setConfig(novo);
     lsSet(LS_KEYS.config, novo);
   };
@@ -632,7 +658,7 @@ function ConfigProvider({ children }) {
    CONFIGURAÇÕES (chave de API + backup)
 =========================================================== */
 function SettingsModal({ onClose, fretes, custos, onImport, onLiberarEspaco, pastaHandle, pastaNome, pastaPrecisaReconectar, pastaStatus, conectarPasta, reconectarPasta, desconectarPasta, dropboxConectado, dropboxStatus, desconectarDropbox }) {
-  const [dropboxAppKey, setDropboxAppKey] = useState(() => localStorage.getItem(LS_DROPBOX.appKey) || "");
+  const [dropboxAppKey, setDropboxAppKey] = useState(() => localStorage.getItem(LS_DROPBOX.appKey) || DROPBOX_APP_KEY_PADRAO);
   const { config, atualizarConfig } = useConfig();
   const [apiKey, setApiKey] = useState(localStorage.getItem(LS_KEYS.apiKey) || "");
   const [saved, setSaved] = useState(false);
@@ -716,6 +742,9 @@ function SettingsModal({ onClose, fretes, custos, onImport, onLiberarEspaco, pas
 
   const salvarChave = () => {
     localStorage.setItem(LS_KEYS.apiKey, apiKey.trim());
+    // grava também no config, que é sincronizado — assim a chave acompanha as
+    // versões novas do app e os outros dispositivos, sem redigitar
+    atualizarConfig({ ...config, apiKey: apiKey.trim() });
     setSaved(true);
     setTimeout(() => setSaved(false), 1500);
   };
@@ -966,7 +995,7 @@ function SettingsModal({ onClose, fretes, custos, onImport, onLiberarEspaco, pas
                   Diferente da pasta local, o Dropbox funciona em qualquer navegador — inclusive no Safari do iPhone. Os dados passam a ser lidos e gravados direto na sua conta, pela internet.
                 </p>
                 <Field label="App Key do Dropbox (criada uma vez, gratuita)">
-                  <input type="text" value={dropboxAppKey} onChange={(e) => { setDropboxAppKey(e.target.value); localStorage.setItem(LS_DROPBOX.appKey, e.target.value); }} placeholder="Cole aqui a App Key" />
+                  <input type="text" value={dropboxAppKey} onChange={(e) => { setDropboxAppKey(e.target.value); localStorage.setItem(LS_DROPBOX.appKey, e.target.value); atualizarConfig({ ...config, dropboxAppKey: e.target.value }); }} placeholder="Cole aqui a App Key" />
                 </Field>
                 <button
                   disabled={!dropboxAppKey.trim()}
