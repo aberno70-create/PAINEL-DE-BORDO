@@ -93,7 +93,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v35";
+const APP_VERSION = "v36";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -320,6 +320,124 @@ async function dropboxEscreverDados(dados) {
     body: JSON.stringify(dados)
   });
   if (!resp.ok) throw new Error("FALHA_ESCRITA");
+}
+
+/* ===========================================================
+   CAIXA DE ENTRADA NO DROPBOX (pasta do app)
+   Voce manda a foto do celular para a pasta ENTRADA dentro da
+   pasta do app no Dropbox; o app le, propoe e lanca.
+=========================================================== */
+const PASTA_ENTRADA_DBX = "/ENTRADA";
+const PASTA_LANCADOS_DBX = "/LANCADOS";
+
+async function dropboxRpc(endpoint, corpo) {
+  const token = await dropboxTokenValido();
+  if (!token) throw new Error("SEM_TOKEN");
+  const resp = await fetch("https://api.dropboxapi.com/2/" + endpoint, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(corpo)
+  });
+  if (resp.status === 401 || resp.status === 403) {
+    const t = await resp.text();
+    if (/scope/i.test(t)) throw new Error("SEM_PERMISSAO_LISTAR");
+    throw new Error("SEM_TOKEN");
+  }
+  if (!resp.ok) {
+    const t = await resp.text();
+    if (/not_found/.test(t)) return null;
+    throw new Error("FALHA_DROPBOX: " + t.slice(0, 120));
+  }
+  return resp.json();
+}
+
+async function dropboxGarantirPastas() {
+  for (const p of [PASTA_ENTRADA_DBX, PASTA_LANCADOS_DBX]) {
+    try { await dropboxRpc("files/create_folder_v2", { path: p, autorename: false }); }
+    catch (e) { /* ja existe: tudo bem */ }
+  }
+}
+
+async function dropboxListarEntrada() {
+  const r = await dropboxRpc("files/list_folder", { path: PASTA_ENTRADA_DBX, limit: 200 });
+  if (!r) return [];
+  const exts = [".jpg", ".jpeg", ".png", ".webp", ".pdf", ".heic"];
+  return (r.entries || [])
+    .filter(e => e[".tag"] === "file")
+    .filter(e => exts.some(x => e.name.toLowerCase().endsWith(x)))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function dropboxBaixarArquivo(caminho) {
+  const token = await dropboxTokenValido();
+  if (!token) throw new Error("SEM_TOKEN");
+  const resp = await fetch("https://content.dropboxapi.com/2/files/download", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Dropbox-API-Arg": JSON.stringify({ path: caminho }) }
+  });
+  if (!resp.ok) throw new Error("FALHA_DOWNLOAD");
+  return resp.blob();
+}
+
+async function dropboxMoverParaLancados(caminho, nome) {
+  const destino = PASTA_LANCADOS_DBX + "/" + nome;
+  try {
+    await dropboxRpc("files/move_v2", { from_path: caminho, to_path: destino, autorename: true });
+    return true;
+  } catch (e) { return false; }
+}
+
+function blobParaDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = reject;
+    fr.readAsDataURL(blob);
+  });
+}
+
+async function hashDoArquivo(blob) {
+  try {
+    const buf = await blob.arrayBuffer();
+    const h = await crypto.subtle.digest("SHA-256", buf);
+    return Array.from(new Uint8Array(h)).map(b => b.toString(16).padStart(2, "0")).join("");
+  } catch (e) { return null; }
+}
+
+// Uma chamada so: descobre O QUE e o documento e ja extrai os campos.
+async function classificarDocumento(dataUrl) {
+  const media_type = dataUrl.substring(5, dataUrl.indexOf(";"));
+  const data = dataUrl.split(",")[1];
+  const isPdf = media_type === "application/pdf";
+  const bloco = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data } }
+    : { type: "image", source: { type: "base64", media_type, data } };
+  return callClaudeVision([
+    bloco,
+    {
+      type: "text",
+      text:
+        "Documento de uma transportadora rodoviária brasileira. Responda APENAS com JSON válido, sem markdown:\n" +
+        '{ "tipoDocumento": ("comprovante_bancario"|"nota_fiscal"|"cupom"|"tiquete_frete"|"outro"),\n' +
+        '  "categoria": ("frete"|"despesa"|"pagamento"|"recebimento"),\n' +
+        '  "tipoCusto": ("combustivel"|"pedagio"|"manutencao"|""),\n' +
+        '  "valor": (número), "data": ("AAAA-MM-DD" ou ""), "numeroContainer": (string ou ""),\n' +
+        '  "cteNumero": (string ou ""), "cliente": (string ou ""), "fornecedor": (posto/oficina ou ""),\n' +
+        '  "pagador": (string ou ""), "recebedor": (string ou ""),\n' +
+        '  "litros": (número ou 0), "descricao": (string curta) }\n\n' +
+        "REGRA IMPORTANTE: um comprovante bancário (PIX/TED/transferência) NUNCA é despesa — " +
+        "ele só movimenta dinheiro, então a categoria é pagamento ou recebimento. " +
+        "Só nota fiscal, cupom ou recibo do fornecedor é despesa. " +
+        "Tíquete/CTe da transportadora é frete."
+    }
+  ]);
+}
+
+function padronizarContainerApp(txt) {
+  if (!txt) return "";
+  const limpo = String(txt).replace(/[^A-Za-z0-9]/g, "").toUpperCase();
+  const m = limpo.match(/^([A-Z]{4})(\d{6})(\d)$/);
+  return m ? `${m[1]} ${m[2]}-${m[3]}` : String(txt).trim().toUpperCase();
 }
 
 /* ===========================================================
@@ -2637,6 +2755,437 @@ function AvisoVersaoNova() {
   );
 }
 
+function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) {
+  const meus = motorista === "todos" ? null : motorista;
+  const bate = (nome) => !meus || (nome || "") === meus;
+
+  // fila unica: comissao de cada frete + despesa que ele bancou, em ordem de data
+  const pendentes = [];
+  fretes.forEach(f => {
+    if (!bate(f.motorista)) return;
+    const item = comissaoComoItem(f);
+    const falta = saldoPendenteCusto(item);
+    if (falta > 0.004) pendentes.push({
+      kind: "comissao", data: f.dataTiquete || "", container: f.numeroContainer || "TBN",
+      rotulo: "COMISSÃO", devido: item.valor, pago: valorPagoAcumulado(item), falta
+    });
+  });
+  custos.forEach(c => {
+    if (c.pagoPor !== "motorista" || !bate(c.motorista)) return;
+    const falta = saldoPendenteCusto(c);
+    if (falta > 0.004) {
+      const viagem = fretes.find(f => f.id === c.freteId);
+      pendentes.push({
+        kind: "custo", data: c.data || "", container: viagem ? (viagem.numeroContainer || "TBN") : "—",
+        rotulo: (c.tipo || "").toUpperCase() + (c.fornecedor || c.posto ? " · " + (c.fornecedor || c.posto) : ""),
+        devido: Number(c.valor) || 0, pago: valorPagoAcumulado(c), falta
+      });
+    }
+  });
+  pendentes.sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+
+  // composicao de cada deposito, agrupado pelo comprovante (loteId)
+  const lotes = {};
+  const guarda = (id, reg) => {
+    if (!lotes[id]) lotes[id] = { data: reg.data, total: reg.total, linhas: [] };
+    lotes[id].linhas.push(reg);
+    if (reg.total) lotes[id].total = reg.total;
+  };
+  fretes.forEach(f => {
+    if (!bate(f.motorista)) return;
+    (f.comissaoPagamentos || []).forEach(p => guarda(p.loteId || p.id, {
+      tipo: "COMISSÃO", ref: f.numeroContainer || "TBN", det: "frete de " + (f.dataTiquete || ""),
+      valor: Number(p.valor) || 0, data: p.data || "", total: Number(p.valorTotalComprovante) || 0
+    }));
+  });
+  custos.forEach(c => {
+    if (c.pagoPor !== "motorista" || !bate(c.motorista)) return;
+    const viagem = fretes.find(f => f.id === c.freteId);
+    (c.pagamentos || []).forEach(p => guarda(p.loteId || p.id, {
+      tipo: (c.tipo || "").toUpperCase(), ref: viagem ? (viagem.numeroContainer || "TBN") : "—",
+      det: (c.fornecedor || c.posto || "") + " despesa de " + (c.data || ""),
+      valor: Number(p.valor) || 0, data: p.data || "", total: Number(p.valorTotalComprovante) || 0
+    }));
+  });
+  const listaLotes = Object.entries(lotes).sort((a, b) => (a[1].data || "").localeCompare(b[1].data || ""));
+
+  const totalPendente = pendentes.reduce((s, p) => s + p.falta, 0);
+  let comDev = 0, comPago = 0;
+  fretes.forEach(f => {
+    if (!bate(f.motorista)) return;
+    const it = comissaoComoItem(f);
+    comDev += it.valor; comPago += valorPagoAcumulado(it);
+  });
+  const credito = (creditos || []).filter(c => c.tipo === "motorista").reduce((s, c) => s + (Number(c.valor) || 0), 0);
+
+  const Card = ({ titulo, valor, cor }) => (
+    <div className="rounded-lg p-3" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4", minWidth: 150, flex: "1 1 150px" }}>
+      <div className="text-[10px] uppercase tracking-wide" style={{ color: "#8A8577" }}>{titulo}</div>
+      <div className="text-lg font-semibold" style={{ color: cor, fontFamily: "'JetBrains Mono', monospace" }}>{currency(valor)}</div>
+    </div>
+  );
+  const Th = ({ children, r }) => (
+    <th className="px-2 py-1.5 text-[10px] uppercase tracking-wide" style={{ background: "#1C1E22", color: "#F4F1E8", textAlign: r ? "right" : "left" }}>{children}</th>
+  );
+  const Td = ({ children, r, cor, mono }) => (
+    <td className="px-2 py-1.5 text-xs" style={{ borderTop: "1px solid #EDE8DA", textAlign: r ? "right" : "left", color: cor || "#24221D", fontFamily: mono ? "'JetBrains Mono', monospace" : "inherit", whiteSpace: r ? "nowrap" : "normal" }}>{children}</td>
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap gap-2">
+        <Card titulo="Saldo devedor a ele" valor={totalPendente} cor="#B5473A" />
+        <Card titulo="Comissão gerada" valor={comDev} cor="#B5762A" />
+        <Card titulo="Comissão paga" valor={comPago} cor="#4C7A5E" />
+        <Card titulo="Crédito a favor" valor={credito} cor="#4C7A5E" />
+      </div>
+
+      <div>
+        <div className="text-sm font-semibold mb-1" style={{ fontFamily: "'Oswald', sans-serif" }}>
+          1 · Em aberto, do mais antigo para o mais recente
+        </div>
+        <div className="text-[11px] mb-1.5" style={{ color: "#8A8577" }}>
+          É nesta ordem que o próximo depósito deve ir abatendo.
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #D9D3C4", minWidth: 520 }}>
+            <thead><tr><Th>Data</Th><Th>O que é</Th><Th>Container</Th><Th r>Devido</Th><Th r>Pago</Th><Th r>Falta</Th></tr></thead>
+            <tbody>
+              {pendentes.length ? pendentes.map((p, i) => (
+                <tr key={i}>
+                  <Td>{p.data}</Td><Td>{p.rotulo}</Td>
+                  <Td mono>{p.container}</Td>
+                  <Td r mono>{currency(p.devido)}</Td>
+                  <Td r mono cor="#4C7A5E">{currency(p.pago)}</Td>
+                  <Td r mono cor="#B5473A">{currency(p.falta)}</Td>
+                </tr>
+              )) : <tr><Td>Nada em aberto — a conta está zerada.</Td></tr>}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div className="text-sm font-semibold mb-1" style={{ fontFamily: "'Oswald', sans-serif" }}>
+          2 · Composição de cada depósito
+        </div>
+        {listaLotes.length ? listaLotes.map(([id, l]) => {
+          const soma = l.linhas.reduce((s, x) => s + x.valor, 0);
+          const fecha = !l.total || Math.abs(l.total - soma) < 0.02;
+          return (
+            <div key={id} className="rounded-lg p-2.5 mb-2" style={{ background: "#fff", border: "1px solid #D9D3C4" }}>
+              <div className="text-xs mb-1">
+                <b style={{ fontFamily: "'JetBrains Mono', monospace", color: "#B5762A" }}>{currency(l.total || soma)}</b>
+                {" em " + (l.data || "—")}
+                <span style={{ color: fecha ? "#4C7A5E" : "#B5473A", marginLeft: 8 }}>
+                  {fecha ? "confere" : "NÃO FECHA"}
+                </span>
+              </div>
+              {l.linhas.map((x, j) => (
+                <div key={j} className="flex justify-between text-[11px] py-0.5" style={{ borderTop: "1px solid #EDE8DA" }}>
+                  <span>{x.tipo} · <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{x.ref}</span> <span style={{ color: "#8A8577" }}>{x.det}</span></span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace" }}>{currency(x.valor)}</span>
+                </div>
+              ))}
+            </div>
+          );
+        }) : <div className="text-xs" style={{ color: "#8A8577" }}>Nenhum pagamento registrado ainda.</div>}
+      </div>
+
+      <div>
+        <div className="text-sm font-semibold mb-1" style={{ fontFamily: "'Oswald', sans-serif" }}>
+          3 · Comissão por frete
+        </div>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #D9D3C4", minWidth: 520 }}>
+            <thead><tr><Th>Data</Th><Th>Container</Th><Th r>Frete</Th><Th r>Comissão</Th><Th r>Paga</Th><Th r>Falta</Th></tr></thead>
+            <tbody>
+              {fretes.filter(f => bate(f.motorista) && (f.comissaoMotorista || 0) > 0)
+                .sort((a, b) => (a.dataTiquete || "").localeCompare(b.dataTiquete || ""))
+                .map(f => {
+                  const it = comissaoComoItem(f);
+                  const pg = valorPagoAcumulado(it);
+                  const falta = Math.max(it.valor - pg, 0);
+                  return (
+                    <tr key={f.id}>
+                      <Td>{f.dataTiquete}</Td>
+                      <Td mono>{f.numeroContainer || "TBN"}</Td>
+                      <Td r mono>{currency(f.valorFrete)}</Td>
+                      <Td r mono>{currency(it.valor)}</Td>
+                      <Td r mono cor="#4C7A5E">{currency(pg)}</Td>
+                      <Td r mono cor={falta > 0.004 ? "#B5473A" : "#8A8577"}>{currency(falta)}</Td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, config }) {
+  const [estado, setEstado] = useState("parado");   // parado | buscando | pronto | erro
+  const [erro, setErro] = useState("");
+  const [itens, setItens] = useState([]);
+  const [processados, setProcessados] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("gvgs_docs_processados") || "{}"); }
+    catch (e) { return {}; }
+  });
+
+  const guardarProcessado = (hash, info) => {
+    const novo = { ...processados, [hash]: info };
+    setProcessados(novo);
+    try { localStorage.setItem("gvgs_docs_processados", JSON.stringify(novo)); } catch (e) {}
+  };
+
+  const jaExisteNoApp = (it) => {
+    const v = Number(it.valor) || 0;
+    if (!v || !it.data) return "";
+    if (it.categoria === "frete") {
+      const c = padronizarContainerApp(it.container);
+      const achou = fretes.find(f =>
+        (c && padronizarContainerApp(f.numeroContainer) === c && Math.abs((Number(f.valorFrete) || 0) - v) < 0.01) ||
+        (f.dataTiquete === it.data && Math.abs((Number(f.valorFrete) || 0) - v) < 0.01));
+      if (achou) return `já existe o frete ${achou.numeroContainer || "TBN"} de ${currency(achou.valorFrete)}`;
+    }
+    if (it.categoria === "despesa") {
+      const achou = custos.find(c => c.data === it.data && Math.abs((Number(c.valor) || 0) - v) < 0.01
+        && (!it.tipoCusto || c.tipo === it.tipoCusto));
+      if (achou) return `já existe um custo de ${achou.tipo} de ${currency(achou.valor)} em ${achou.data}`;
+    }
+    return "";
+  };
+
+  const buscar = async () => {
+    setEstado("buscando"); setErro(""); setItens([]);
+    try {
+      if (!dropboxEstaConectado()) throw new Error("SEM_DROPBOX");
+      await dropboxGarantirPastas();
+      const arquivos = await dropboxListarEntrada();
+      if (!arquivos.length) { setEstado("pronto"); return; }
+      const lidos = [];
+      for (const a of arquivos) {
+        const linha = { nome: a.name, caminho: a.path_lower, estado: "lendo", incluir: true };
+        lidos.push(linha);
+        setItens([...lidos]);
+        try {
+          const blob = await dropboxBaixarArquivo(a.path_lower);
+          const hash = await hashDoArquivo(blob);
+          linha.hash = hash;
+          if (hash && processados[hash]) {
+            linha.estado = "duplicado";
+            linha.aviso = "este arquivo já foi lançado antes";
+            linha.incluir = false;
+            setItens([...lidos]);
+            continue;
+          }
+          const dataUrl = await blobParaDataUrl(blob);
+          linha.thumb = a.name.toLowerCase().endsWith(".pdf") ? null : await resizeImage(dataUrl);
+          linha.ehPdf = a.name.toLowerCase().endsWith(".pdf");
+          const r = await classificarDocumento(dataUrl);
+          linha.categoria = r.categoria || "despesa";
+          if (r.tipoDocumento === "comprovante_bancario" && linha.categoria === "despesa") {
+            linha.categoria = "pagamento";
+          }
+          linha.tipoCusto = r.tipoCusto || "combustivel";
+          linha.valor = Number(r.valor) || 0;
+          linha.data = r.data || "";
+          linha.container = padronizarContainerApp(r.numeroContainer || "");
+          linha.cteNumero = r.cteNumero || "";
+          linha.cliente = r.cliente || config.clientePadrao;
+          linha.fornecedor = r.fornecedor || "";
+          linha.litros = Number(r.litros) || 0;
+          linha.descricao = r.descricao || "";
+          linha.pagador = r.pagador || "";
+          linha.recebedor = r.recebedor || "";
+          linha.aviso = jaExisteNoApp(linha);
+          if (linha.aviso) { linha.estado = "duplicado"; linha.incluir = false; }
+          else if (linha.categoria === "pagamento") {
+            linha.estado = "computador";
+            linha.aviso = "pagamento: faça no computador, onde há a tela de rateio";
+            linha.incluir = false;
+          } else { linha.estado = "pronto"; }
+        } catch (e) {
+          linha.estado = "erro";
+          linha.aviso = e.message === "SEM_CHAVE_API"
+            ? "falta a chave da API nas Configurações"
+            : "não consegui ler: " + (e.message || "erro");
+          linha.incluir = false;
+        }
+        setItens([...lidos]);
+      }
+      setEstado("pronto");
+    } catch (e) {
+      setEstado("erro");
+      setErro(
+        e.message === "SEM_DROPBOX" ? "Conecte o Dropbox nas Configurações para usar a caixa de entrada."
+        : e.message === "SEM_PERMISSAO_LISTAR" ? "O app do Dropbox não tem permissão para LISTAR arquivos. Em dropbox.com/developers/apps, na aba Permissions, marque files.metadata.read, salve, e reconecte o Dropbox aqui nas Configurações."
+        : e.message === "SEM_TOKEN" ? "A conexão com o Dropbox expirou. Reconecte nas Configurações."
+        : "Não consegui acessar a pasta ENTRADA: " + (e.message || "erro"));
+    }
+  };
+
+  const lancar = async (i) => {
+    const it = itens[i];
+    if (!it || !it.valor || !it.data) return;
+    const novos = [...itens];
+    novos[i] = { ...it, estado: "lancando" };
+    setItens(novos);
+    try {
+      if (it.categoria === "frete") {
+        const valor = Number(it.valor) || 0;
+        onNovoFrete({
+          id: uid(), imagemThumb: it.thumb || null, temAnexoPdf: !!it.ehPdf,
+          valorFrete: valor, dataTiquete: it.data,
+          comissaoMotorista: Number((valor * PERCENTUAL_COMISSAO).toFixed(2)),
+          comissaoPagamentos: [], motorista: config.motoristas[0] || "",
+          cteNumero: it.cteNumero || "", cliente: it.cliente || config.clientePadrao,
+          caminhao: "", numeroContainer: padronizarContainerApp(it.container),
+          observacao: "Lançado pela caixa de entrada (" + it.nome + ")",
+          status: "pendente", statusComissao: "pendente", dataPagamento: null,
+          dataCriacao: new Date().toISOString(),
+          origemArquivo: it.nome, origemHash: it.hash || null
+        });
+      } else if (it.categoria === "despesa") {
+        const alvo = fretes.find(f => padronizarContainerApp(f.numeroContainer) === padronizarContainerApp(it.container));
+        onNovoCusto({
+          id: uid(), tipo: it.tipoCusto,
+          itemPrincipal: it.tipoCusto === "manutencao" ? "Outros" : "",
+          fornecedor: it.tipoCusto === "manutencao" ? (it.fornecedor || "") : "",
+          valor: Number(it.valor) || 0, litros: Number(it.litros) || 0,
+          posto: it.tipoCusto === "combustivel" ? (it.fornecedor || "") : "",
+          precoUnitario: null, desconto: 0, precoLiquido: null, quilometragem: null,
+          descricao: it.descricao || "", veiculo: "", data: it.data,
+          imagemThumb: it.thumb || null, temAnexoPdf: !!it.ehPdf,
+          pagoPor: "motorista", motorista: config.motoristas[0] || "",
+          statusRessarcimento: "pendente", valorReembolsado: null, statusPagamento: null,
+          formaPagamento: null, parcelas: [], pagamentos: [],
+          freteId: alvo ? alvo.id : null,
+          origemArquivo: it.nome, origemHash: it.hash || null
+        });
+      } else if (it.categoria === "recebimento") {
+        const alvo = fretes.find(f => padronizarContainerApp(f.numeroContainer) === padronizarContainerApp(it.container));
+        if (alvo) onMarcarRecebido(alvo.id, it.data);
+      }
+      if (it.hash) guardarProcessado(it.hash, { nome: it.nome, em: new Date().toISOString(), valor: it.valor });
+      await dropboxMoverParaLancados(it.caminho, it.nome);
+      const depois = [...itens];
+      depois[i] = { ...it, estado: "lancado" };
+      setItens(depois);
+    } catch (e) {
+      const depois = [...itens];
+      depois[i] = { ...it, estado: "erro", aviso: "erro ao lançar: " + (e.message || "") };
+      setItens(depois);
+    }
+  };
+
+  const atualizar = (i, campo, valor) => {
+    const novos = [...itens];
+    novos[i] = { ...novos[i], [campo]: valor };
+    setItens(novos);
+  };
+
+  const prontos = itens.filter(x => x.estado === "pronto").length;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="rounded-lg p-3" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4" }}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div>
+            <div className="text-sm font-semibold" style={{ fontFamily: "'Oswald', sans-serif" }}>
+              Caixa de entrada
+            </div>
+            <div className="text-xs" style={{ color: "#8A8577" }}>
+              Mande as fotos do celular para a pasta <b>ENTRADA</b> dentro de
+              <b> Apps/painel-de-bordo-gvgs-alexandre</b> no Dropbox.
+            </div>
+          </div>
+          <button onClick={buscar} disabled={estado === "buscando"}
+            className="px-4 py-2 rounded-md text-xs font-semibold uppercase tracking-wide text-white disabled:opacity-50"
+            style={{ background: "#4C7A5E", fontFamily: "'Oswald', sans-serif" }}>
+            {estado === "buscando" ? "Lendo..." : "Buscar documentos"}
+          </button>
+        </div>
+        {erro && (
+          <div className="mt-2 text-xs p-2 rounded" style={{ background: "#F6DCD8", color: "#8C2F24" }}>{erro}</div>
+        )}
+        {estado === "pronto" && !itens.length && !erro && (
+          <div className="mt-2 text-xs" style={{ color: "#8A8577" }}>Nenhum documento novo na ENTRADA.</div>
+        )}
+        {itens.length > 0 && (
+          <div className="mt-2 text-xs" style={{ color: "#4C7A5E" }}>
+            {prontos} pronto(s) para lançar de {itens.length} encontrado(s)
+          </div>
+        )}
+      </div>
+
+      {itens.map((it, i) => (
+        <div key={it.caminho} className="rounded-lg p-3 flex gap-3"
+             style={{ background: "#FFFFFF",
+                      border: "1px solid " + (it.estado === "duplicado" ? "#E0A9A0" : "#D9D3C4"),
+                      opacity: it.estado === "lancado" ? 0.55 : 1 }}>
+          <div style={{ width: 64, minWidth: 64, height: 64, background: "#EDE8DA", borderRadius: 6,
+                        overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+            {it.thumb ? <img src={it.thumb} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                      : <span className="text-[10px]" style={{ color: "#8A8577" }}>{it.ehPdf ? "PDF" : "..."}</span>}
+          </div>
+          <div className="flex-1" style={{ minWidth: 0 }}>
+            <div className="text-[11px] truncate" style={{ color: "#8A8577" }}>{it.nome}</div>
+            {it.estado === "lendo" && <div className="text-xs mt-1">lendo o documento...</div>}
+            {it.estado === "lancado" && <div className="text-xs mt-1" style={{ color: "#4C7A5E" }}>lançado ✓</div>}
+            {(it.estado === "pronto" || it.estado === "duplicado" || it.estado === "computador") && (
+              <>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  <select value={it.categoria} onChange={e => atualizar(i, "categoria", e.target.value)}
+                          className="px-2 py-1 rounded text-xs" style={inputStyle}>
+                    <option value="frete">Frete</option>
+                    <option value="despesa">Despesa</option>
+                    <option value="pagamento">Pagamento</option>
+                    <option value="recebimento">Recebimento</option>
+                  </select>
+                  {it.categoria === "despesa" && (
+                    <select value={it.tipoCusto} onChange={e => atualizar(i, "tipoCusto", e.target.value)}
+                            className="px-2 py-1 rounded text-xs" style={inputStyle}>
+                      <option value="combustivel">Combustível</option>
+                      <option value="pedagio">Pedágio</option>
+                      <option value="manutencao">Manutenção</option>
+                    </select>
+                  )}
+                  <input type="date" value={it.data} onChange={e => atualizar(i, "data", e.target.value)}
+                         className="px-2 py-1 rounded text-xs" style={inputStyle} />
+                  <input type="number" step="0.01" value={it.valor}
+                         onChange={e => atualizar(i, "valor", e.target.value)}
+                         className="px-2 py-1 rounded text-xs" style={{ ...inputStyle, width: 96 }} />
+                  <input type="text" value={it.container} placeholder="container"
+                         onChange={e => atualizar(i, "container", e.target.value)}
+                         className="px-2 py-1 rounded text-xs" style={{ ...inputStyle, width: 130 }} />
+                </div>
+                {it.aviso && (
+                  <div className="text-[11px] mt-1.5"
+                       style={{ color: it.estado === "duplicado" ? "#B5473A" : "#8A6116" }}>
+                    {it.estado === "duplicado" ? "POSSÍVEL DUPLICATA — " : ""}{it.aviso}
+                  </div>
+                )}
+                <button onClick={() => lancar(i)} disabled={!it.valor || !it.data}
+                  className="mt-2 px-3 py-1.5 rounded text-[11px] font-semibold uppercase text-white disabled:opacity-40"
+                  style={{ background: it.estado === "duplicado" ? "#B5473A" : "#B5762A",
+                           fontFamily: "'Oswald', sans-serif" }}>
+                  {it.estado === "duplicado" ? "Lançar mesmo assim" : "Lançar"}
+                </button>
+              </>
+            )}
+            {it.estado === "erro" && (
+              <div className="text-[11px] mt-1" style={{ color: "#B5473A" }}>{it.aviso}</div>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function LoginGate({ children }) {
   const { config, atualizarConfig } = useConfig();
   const [temSenha, setTemSenha] = useState(() => !!localStorage.getItem(LS_KEYS.senhaHash));
@@ -3332,6 +3881,7 @@ function ControleFretes() {
     { id: "dashboard", label: "Resumo", icon: IconTrendUp },
     { id: "fretes", label: "Fretes", icon: IconTruck },
     { id: "custos", label: "Custos", icon: IconFuel },
+    { id: "entrada", label: "Entrada", icon: IconUpload },
     { id: "motorista", label: "Motorista", icon: IconUser },
     { id: "relatorios", label: "Relatórios", icon: IconFileText }
   ];
@@ -4042,6 +4592,16 @@ function ControleFretes() {
               );
             })()}
           </div>
+        ) : tab === "entrada" ? (
+          <AbaEntrada
+            fretes={fretes}
+            custos={custos}
+            config={config}
+            onNovoFrete={(f) => persistFretes([...fretes, f])}
+            onNovoCusto={(c) => persistCustos([...custos, c])}
+            onMarcarRecebido={(id, data) =>
+              persistFretes(fretes.map(f => f.id === id ? { ...f, status: "pago", dataPagamento: data } : f))}
+          />
         ) : tab === "motorista" ? (
           <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center gap-2 no-print">
@@ -4055,7 +4615,8 @@ function ControleFretes() {
               {[
                 { id: "ambos", label: "Tickets + Extrato" },
                 { id: "tickets", label: "Somente tickets" },
-                { id: "extrato", label: "Somente extrato" }
+                { id: "extrato", label: "Somente extrato" },
+                { id: "acerto", label: "Conta corrente / acerto" }
               ].map(op => (
                 <button key={op.id} onClick={() => setMotoristaVisualizacao(op.id)} className="px-3 py-1.5 rounded-md text-xs font-semibold uppercase tracking-wide border"
                         style={{ background: motoristaVisualizacao === op.id ? "#1C1E22" : "#FFFFFF", color: motoristaVisualizacao === op.id ? "#FFFFFF" : "#24221D", borderColor: motoristaVisualizacao === op.id ? "#1C1E22" : "#D9D3C4", fontFamily: "'Oswald', sans-serif" }}>
@@ -4063,7 +4624,12 @@ function ControleFretes() {
                 </button>
               ))}
             </div>
-            {creditos.filter(cr => cr.tipo === "motorista" && (motoristaFiltro === "todos" || cr.chave === motoristaFiltro)).length > 0 && (
+            {motoristaVisualizacao === "acerto" && (
+              <RelatorioMotoristaApp
+                fretes={fretes} custos={custos} creditos={creditos}
+                motorista={motoristaFiltro} config={config} />
+            )}
+            {motoristaVisualizacao !== "acerto" && creditos.filter(cr => cr.tipo === "motorista" && (motoristaFiltro === "todos" || cr.chave === motoristaFiltro)).length > 0 && (
               <div className="rounded-md overflow-hidden" style={{ background: "#FDF6EC", border: "1px solid #E8C79A" }}>
                 <div className="px-3 py-2 text-xs font-semibold uppercase tracking-wide" style={{ color: "#B5762A", fontFamily: "'Oswald', sans-serif" }}>
                   Créditos disponíveis (comprovantes com saldo, ainda não usados numa despesa/comissão)
@@ -4118,7 +4684,7 @@ function ControleFretes() {
                       <StatCard label="Motorista deve devolver" value={currency(aReceberDoMotoristaM)} icon={IconAlert} tone={aReceberDoMotoristaM > 0 ? "danger" : "success"} />
                     </div>
                   </div>
-                  {motoristaVisualizacao !== "extrato" && fretesM.length > 0 && (
+                  {motoristaVisualizacao !== "extrato" && motoristaVisualizacao !== "acerto" && fretesM.length > 0 && (
                     <div className="flex flex-col gap-1.5 px-3 pb-3">
                       <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "#8A8577" }}>Comissões por guia de frete</div>
                       {fretesM.slice().sort((a, b) => (a.dataTiquete || "").localeCompare(b.dataTiquete || "")).map(f => (
@@ -4126,7 +4692,7 @@ function ControleFretes() {
                       ))}
                     </div>
                   )}
-                  {motoristaVisualizacao !== "extrato" && custosM.length > 0 && (
+                  {motoristaVisualizacao !== "extrato" && motoristaVisualizacao !== "acerto" && custosM.length > 0 && (
                     <div className="flex flex-col gap-1.5 px-3 pb-3">
                       <div className="text-[11px] font-semibold uppercase tracking-wide" style={{ color: "#8A8577" }}>Despesas reembolsáveis</div>
                       {custosM.slice().sort((a, b) => (a.data || "").localeCompare(b.data || "")).map(c => (
@@ -4134,7 +4700,7 @@ function ControleFretes() {
                       ))}
                     </div>
                   )}
-                  {motoristaVisualizacao !== "tickets" && (() => {
+                  {motoristaVisualizacao !== "tickets" && motoristaVisualizacao !== "acerto" && (() => {
                     if (extrato.length === 0) return null;
                     return (
                       <div className="px-3 pb-3 no-motorista-extrato">
