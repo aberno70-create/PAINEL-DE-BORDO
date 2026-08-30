@@ -146,7 +146,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v38";
+const APP_VERSION = "v39";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -430,6 +430,26 @@ async function dropboxBaixarArquivo(caminho) {
   });
   if (!resp.ok) throw new Error("FALHA_DOWNLOAD");
   return resp.blob();
+}
+
+// Nome no padrao do Alexandre: CONTAINER AAAA-MM-DD tipo R$ VALOR.ext
+// Ex.: "CAAU 751942-4 2026-07-14 combustivel R$ 500,40.jpg"
+function nomePadronizadoApp(item) {
+  const ext = (item.nome.match(/\.[A-Za-z0-9]+$/) || [""])[0].toLowerCase() || ".jpg";
+  const rotulo = item.categoria === "frete" ? "frete"
+    : item.categoria === "recebimento" ? "recebimento frete"
+    : item.categoria === "pagamento" ? "transferencia"
+    : (item.tipoCusto === "combustivel" ? "combustivel"
+       : item.tipoCusto === "pedagio" ? "pedagio" : "manutencao");
+  const valor = (Number(item.valor) || 0).toFixed(2).replace(".", ",");
+  const partes = [];
+  if (item.container) partes.push(item.container);
+  if (item.data) partes.push(item.data);
+  partes.push(rotulo);
+  partes.push("R$ " + valor);
+  // o Dropbox recusa / \\ : ? * < > | e aspas em nome de arquivo
+  const limpo = partes.join(" ").replace(/[\/\\:?*<>|"]/g, "-").trim();
+  return (limpo || item.nome.replace(ext, "")) + ext;
 }
 
 async function dropboxMoverParaLancados(caminho, nome) {
@@ -1938,14 +1958,17 @@ function CustoDetailModal({ custo, fretesDisponiveis, onClose, onSave, onDelete 
    total dele, para poder mostrar em qualquer tela quais
    documentos aquele mesmo comprovante quitou.
 =========================================================== */
-function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm }) {
+function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm, prefill }) {
   const ehMotorista = custo.pagoPor === "motorista";
-  const [step, setStep] = useState("upload");
-  const [imgThumb, setImgThumb] = useState(null);
-  const [isPdf, setIsPdf] = useState(false);
+  // prefill chega quando o comprovante veio da caixa de ENTRADA: o documento ja
+  // foi lido, entao o modal abre direto na conferencia, com valor, data e a
+  // miniatura no lugar. Sem prefill o fluxo e o de sempre (enviar o arquivo).
+  const [step, setStep] = useState(prefill ? "review" : "upload");
+  const [imgThumb, setImgThumb] = useState(prefill?.thumb || null);
+  const [isPdf, setIsPdf] = useState(!!prefill?.ehPdf);
   const [errorMsg, setErrorMsg] = useState("");
-  const [valor, setValor] = useState(String(saldoPendenteCusto(custo)));
-  const [data, setData] = useState(dataHojeISO());
+  const [valor, setValor] = useState(prefill?.valor ? String(prefill.valor) : String(saldoPendenteCusto(custo)));
+  const [data, setData] = useState(prefill?.data || dataHojeISO());
   const outrosPendentesOrdenados = (custosRelacionados || [])
     .filter(c => c.id !== custo.id && !custoEstaLiquidado(c))
     .slice()
@@ -1964,7 +1987,8 @@ function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm }) 
     }
     return sel;
   };
-  const [selecionados, setSelecionados] = useState(() => calcularSugestao(valor));
+  const [selecionados, setSelecionados] = useState(
+    () => calcularSugestao(prefill?.valor ? String(prefill.valor) : String(saldoPendenteCusto(custo))));
   const fileRef = useRef(null);
 
   const handleFile = async (file) => {
@@ -2030,12 +2054,19 @@ function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm }) 
       <div className="w-full max-w-sm rounded-lg overflow-hidden flex flex-col max-h-[90vh]" style={{ background: "var(--fundo)", border: "1px solid var(--borda)" }}>
         <div className="flex items-center justify-between px-4 py-3" style={{ background: "var(--barra)" }}>
           <span className="text-white text-sm font-semibold uppercase tracking-wider" style={{ fontFamily: "'Oswald', sans-serif" }}>
-            {ehMotorista ? "Ressarcimento ao motorista" : "Pagamento ao fornecedor"}
+            {prefill ? "Acertar o pagamento" : ehMotorista ? "Ressarcimento ao motorista" : "Pagamento ao fornecedor"}
           </span>
           <button onClick={onClose} className="text-white/70 hover:text-white"><IconX size={18} /></button>
         </div>
         <div className="p-4 overflow-y-auto flex flex-col gap-3">
-          <p className="text-xs" style={{ color: "var(--suave)" }}>Saldo pendente desta despesa: <b>{currency(saldoPendenteCusto(custo))}</b>. Envie o comprovante {ehMotorista ? "da transferência ao motorista" : "do pagamento"} para preencher automaticamente.</p>
+          {prefill ? (
+            <p className="text-xs" style={{ color: "var(--suave)" }}>
+              Comprovante lido da caixa de entrada: <b>{prefill.nome}</b>. Confira o valor e marque
+              o que este depósito quita — as pendências mais antigas vêm marcadas primeiro.
+            </p>
+          ) : (
+            <p className="text-xs" style={{ color: "var(--suave)" }}>Saldo pendente desta despesa: <b>{currency(saldoPendenteCusto(custo))}</b>. Envie o comprovante {ehMotorista ? "da transferência ao motorista" : "do pagamento"} para preencher automaticamente.</p>
+          )}
 
           {step === "upload" && (
             <>
@@ -2989,7 +3020,7 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
   );
 }
 
-function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, config }) {
+function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, onPagamento, config }) {
   const [estado, setEstado] = useState("parado");   // parado | buscando | pronto | erro
   const [erro, setErro] = useState("");
   const [itens, setItens] = useState([]);
@@ -3067,8 +3098,11 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
           linha.aviso = jaExisteNoApp(linha);
           if (linha.aviso) { linha.estado = "duplicado"; linha.incluir = false; }
           else if (linha.categoria === "pagamento") {
-            linha.estado = "computador";
-            linha.aviso = "pagamento: faça no computador, onde há a tela de rateio";
+            // Depósito ao motorista / pagamento a fornecedor: abre a tela de rateio
+            // aqui mesmo, com o comprovante já lido. Antes isso ficava para o
+            // computador; não fica mais.
+            linha.estado = "pagamento";
+            linha.aviso = "depósito: toque em ACERTAR para dizer o que ele quita";
             linha.incluir = false;
           } else { linha.estado = "pronto"; }
         } catch (e) {
@@ -3134,7 +3168,7 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
         if (alvo) onMarcarRecebido(alvo.id, it.data);
       }
       if (it.hash) guardarProcessado(it.hash, { nome: it.nome, em: new Date().toISOString(), valor: it.valor });
-      await dropboxMoverParaLancados(it.caminho, it.nome);
+      await dropboxMoverParaLancados(it.caminho, nomePadronizadoApp(it));
       const depois = [...itens];
       depois[i] = { ...it, estado: "lancado" };
       setItens(depois);
@@ -3145,13 +3179,33 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
     }
   };
 
+  // Abre a tela de rateio ja com o comprovante lido. Quem grava e o
+  // ControleFretes; aqui so marcamos a linha e tiramos o arquivo da ENTRADA.
+  const acertarPagamento = (i) => {
+    const it = itens[i];
+    if (!it || !onPagamento) return;
+    onPagamento({
+      valor: Number(it.valor) || 0,
+      data: it.data,
+      thumb: it.thumb || null,
+      ehPdf: !!it.ehPdf,
+      nome: it.nome,
+      recebedor: it.recebedor || "",
+      aoConfirmar: async () => {
+        if (it.hash) guardarProcessado(it.hash, { nome: it.nome, em: new Date().toISOString(), valor: it.valor });
+        await dropboxMoverParaLancados(it.caminho, nomePadronizadoApp(it));
+        setItens(atual => atual.map((x, j) => j === i ? { ...x, estado: "lancado" } : x));
+      }
+    });
+  };
+
   const atualizar = (i, campo, valor) => {
     const novos = [...itens];
     novos[i] = { ...novos[i], [campo]: valor };
     setItens(novos);
   };
 
-  const prontos = itens.filter(x => x.estado === "pronto").length;
+  const prontos = itens.filter(x => x.estado === "pronto" || x.estado === "pagamento").length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -3199,7 +3253,7 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
             <div className="text-[11px] truncate" style={{ color: "var(--suave)" }}>{it.nome}</div>
             {it.estado === "lendo" && <div className="text-xs mt-1">lendo o documento...</div>}
             {it.estado === "lancado" && <div className="text-xs mt-1" style={{ color: "var(--ok)" }}>lançado ✓</div>}
-            {(it.estado === "pronto" || it.estado === "duplicado" || it.estado === "computador") && (
+            {(it.estado === "pronto" || it.estado === "duplicado" || it.estado === "pagamento") && (
               <>
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
                   <select value={it.categoria} onChange={e => atualizar(i, "categoria", e.target.value)}
@@ -3232,11 +3286,13 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
                     {it.estado === "duplicado" ? "POSSÍVEL DUPLICATA — " : ""}{it.aviso}
                   </div>
                 )}
-                <button onClick={() => lancar(i)} disabled={!it.valor || !it.data}
+                <button onClick={() => it.categoria === "pagamento" ? acertarPagamento(i) : lancar(i)}
+                  disabled={!it.valor || !it.data}
                   className="mt-2 px-3 py-1.5 rounded text-[11px] font-semibold uppercase text-white disabled:opacity-40"
                   style={{ background: it.estado === "duplicado" ? "var(--perigo)" : "var(--acento)",
                            fontFamily: "'Oswald', sans-serif" }}>
-                  {it.estado === "duplicado" ? "Lançar mesmo assim" : "Lançar"}
+                  {it.categoria === "pagamento" ? "Acertar pagamento"
+                    : it.estado === "duplicado" ? "Lançar mesmo assim" : "Lançar"}
                 </button>
               </>
             )}
@@ -3633,6 +3689,8 @@ function ControleFretes() {
   const [imagemAmpliada, setImagemAmpliada] = useState(null);
   const [custoAberto, setCustoAberto] = useState(null);
   const [pagamentoAlvo, setPagamentoAlvo] = useState(null);
+  // Quando o comprovante vem da caixa de ENTRADA, o rateio abre ja preenchido.
+  const [pagamentoPrefill, setPagamentoPrefill] = useState(null);
   const [parcelaAlvo, setParcelaAlvo] = useState(null);
   const [dataPagamentoAlvo, setDataPagamentoAlvo] = useState(null);
 
@@ -3776,6 +3834,28 @@ function ControleFretes() {
     }
   };
   const toggleRessarcimento = toggleCustoPagamento;
+  // Um deposito lido na caixa de entrada abre a tela de rateio na pendencia MAIS
+  // ANTIGA do motorista - comissao ou despesa, o que vier primeiro na data. E a
+  // ordem que o Alexandre usa para abater, e a mesma que o PROCESSAR segue.
+  const abrirPagamentoDaEntrada = (info) => {
+    const motorista = config.motoristas[0] || "";
+    const fila = [
+      ...fretes
+        .filter(f => (!motorista || f.motorista === motorista) && (f.comissaoMotorista || 0) > 0)
+        .map(comissaoComoItem),
+      ...custos.filter(c => c.pagoPor === "motorista" && (!motorista || c.motorista === motorista))
+    ].filter(item => !custoEstaLiquidado(item))
+     .sort((a, b) => (a.data || "").localeCompare(b.data || ""));
+
+    if (fila.length === 0) {
+      alert("Não há comissão nem despesa em aberto para o motorista. "
+          + "Lance primeiro os fretes e as despesas que este depósito quita.");
+      return;
+    }
+    setPagamentoPrefill(info);
+    setPagamentoAlvo(fila[0]);
+  };
+
   const confirmarPagamentoCusto = ({ data, comprovanteThumb, valorTotalComprovante, alocacoes, sobra, tipoParte, chaveParte }) => {
     const loteId = uid();
     const porIdCusto = {};
@@ -3803,6 +3883,10 @@ function ControleFretes() {
         id: uid(), tipo: tipoParte, chave: chaveParte, valor: sobra, data, comprovanteThumb, loteId, valorTotalComprovante
       }]);
     }
+    if (pagamentoPrefill && typeof pagamentoPrefill.aoConfirmar === "function") {
+      Promise.resolve(pagamentoPrefill.aoConfirmar()).catch(() => {});
+    }
+    setPagamentoPrefill(null);
     setPagamentoAlvo(null);
   };
 
@@ -4682,6 +4766,7 @@ function ControleFretes() {
             onNovoCusto={(c) => persistCustos([...custos, c])}
             onMarcarRecebido={(id, data) =>
               persistFretes(fretes.map(f => f.id === id ? { ...f, status: "pago", dataPagamento: data } : f))}
+            onPagamento={abrirPagamentoDaEntrada}
           />
         ) : tab === "motorista" ? (
           <div className="flex flex-col gap-4">
@@ -4975,7 +5060,8 @@ function ControleFretes() {
                 const chaveC = c.tipo === "combustivel" ? c.posto : c.fornecedor;
                 return c.pagoPor === "empresa" && c.formaPagamento !== "parcelado" && chaveAlvo && chaveC && chaveC === chaveAlvo;
               })}
-          onClose={() => setPagamentoAlvo(null)}
+          prefill={pagamentoPrefill}
+          onClose={() => { setPagamentoAlvo(null); setPagamentoPrefill(null); }}
           onConfirm={confirmarPagamentoCusto}
         />
       )}
