@@ -30,6 +30,28 @@
 <style>
   body { margin: 0; font-family: 'Inter', sans-serif; background: #F4F1E8; }
   ::-webkit-scrollbar { width: 8px; height: 8px; }
+  /* ---------------------------------------------------------------
+     CELULAR: tabelas largas viram fichas empilhadas. Cada celula
+     passa a ocupar uma linha, com o nome da coluna a esquerda e o
+     valor a direita, para nada mais sair da tela.
+  --------------------------------------------------------------- */
+  @media (max-width: 640px) {
+    table.tab-resp { min-width: 0 !important; width: 100% !important; }
+    table.tab-resp thead { display: none; }
+    table.tab-resp, table.tab-resp tbody, table.tab-resp tr, table.tab-resp td { display: block; width: 100%; }
+    table.tab-resp tr { border-top: 1px solid #D9D3C4 !important; padding: 6px 0; }
+    table.tab-resp td {
+      display: flex; align-items: baseline; justify-content: space-between; gap: 10px;
+      text-align: right !important; border: 0 !important; padding: 2px 10px !important;
+      white-space: normal !important; word-break: break-word;
+    }
+    table.tab-resp td::before {
+      content: attr(data-rot); color: #8A8577; font-size: 10px; letter-spacing: .04em;
+      text-transform: uppercase; text-align: left; flex: 0 0 auto; padding-top: 1px;
+    }
+    .rolagem-resp { overflow-x: visible !important; }
+    .grade-dre { grid-template-columns: 1fr !important; }
+  }
   @media print {
     .no-print { display: none !important; }
     body { background: #FFFFFF !important; }
@@ -93,7 +115,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v36";
+const APP_VERSION = "v37";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -648,11 +670,11 @@ function RessarcimentoTag({ status }) {
 function StatCard({ label, value, icon: IconC, tone = "ink" }) {
   const tones = { ink: "#24221D", success: "#4C7A5E", danger: "#B5473A", accent: "#B5762A" };
   return (
-    <div className="rounded-md p-4 flex-1 min-w-[150px]" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4" }}>
+    <div className="rounded-md p-4 flex-1 min-w-[176px]" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4" }}>
       <div className="flex items-center gap-2 mb-1.5" style={{ color: "#8A8577" }}>
         <IconC size={14} /><span className="text-[11px] uppercase tracking-wider font-medium">{label}</span>
       </div>
-      <div className="text-xl font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: tones[tone] }}>{value}</div>
+      <div className="text-lg sm:text-xl font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: tones[tone] }}>{value}</div>
     </div>
   );
 }
@@ -2428,8 +2450,9 @@ function TicketRow({ frete, onToggle, onToggleComissao, onDelete, onOpen, showEm
     ? (() => { const d = new Date(frete.dataTiquete + "T00:00:00"); d.setDate(d.getDate() + 7); return d.toLocaleDateString("pt-BR"); })()
     : null;
   return (
-    <div onClick={() => onOpen(frete)} className="flex items-center gap-3 rounded-md p-3 relative overflow-hidden cursor-pointer hover:shadow-sm" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4" }}>
+    <div onClick={() => onOpen(frete)} className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 rounded-md p-3 pl-4 relative overflow-hidden cursor-pointer hover:shadow-sm" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4" }}>
       <div className="absolute left-0 top-0 bottom-0 w-1" style={{ background: frete.status === "pago" ? "#4C7A5E" : "#B5473A" }} />
+      <div className="flex items-start gap-3 min-w-0 flex-1">
       {frete.imagemThumb ? <img src={frete.imagemThumb} alt="" onClick={(e) => { e.stopPropagation(); onAbrirImagem(frete.imagemThumb); }} className="w-12 h-12 object-cover rounded shrink-0 cursor-zoom-in" style={{ border: "1px solid #D9D3C4" }} />
         : <div className="w-12 h-12 rounded shrink-0 flex items-center justify-center" style={{ background: "#F4F1E8" }}><IconFile size={16} style={{ color: "#8A8577" }} /></div>}
       <div className="flex-1 min-w-0">
@@ -2446,7 +2469,7 @@ function TicketRow({ frete, onToggle, onToggleComissao, onDelete, onOpen, showEm
           </span>
           {frete.temAnexoPdf && <span className="text-[10px] flex items-center gap-0.5" style={{ color: "#8A8577" }}><IconFile size={11} /> PDF</span>}
         </div>
-        <div className="text-xs truncate" style={{ color: "#8A8577" }}>
+        <div className="text-xs break-words sm:truncate" style={{ color: "#8A8577" }}>
           {[frete.dataTiquete && new Date(frete.dataTiquete + "T00:00:00").toLocaleDateString("pt-BR"), frete.cliente, frete.cteNumero && `CTe ${frete.cteNumero}`, frete.caminhao && `Caminhão ${frete.caminhao}`].filter(Boolean).join(" · ") || "Sem detalhes adicionais"}
         </div>
         {previsaoRecebimento && (
@@ -2481,7 +2504,8 @@ function TicketRow({ frete, onToggle, onToggleComissao, onDelete, onOpen, showEm
           );
         })()}
       </div>
-      <div className="flex flex-col items-end gap-1.5 shrink-0">
+      </div>
+      <div className="flex flex-row sm:flex-col items-center sm:items-end justify-end gap-2 sm:gap-1.5 shrink-0 flex-wrap">
         <div className="flex flex-col items-end">
           <button onClick={(e) => { e.stopPropagation(); onToggle(frete.id); }}><StampBadge status={frete.status} /></button>
           {frete.status === "pago" && frete.dataPagamento && (
@@ -2494,8 +2518,8 @@ function TicketRow({ frete, onToggle, onToggleComissao, onDelete, onOpen, showEm
             <span className="text-[9px]" style={{ color: "#8A8577" }}>{new Date(frete.comissaoPagamentos[frete.comissaoPagamentos.length - 1].data + "T00:00:00").toLocaleDateString("pt-BR")}</span>
           )}
         </div>
+        <button onClick={(e) => { e.stopPropagation(); onDelete(frete.id); }} className="shrink-0 p-1.5 rounded hover:opacity-70 self-center" style={{ color: "#8A8577" }}><IconTrash size={15} /></button>
       </div>
-      <button onClick={(e) => { e.stopPropagation(); onDelete(frete.id); }} className="shrink-0 p-1.5 rounded hover:opacity-70" style={{ color: "#8A8577" }}><IconTrash size={15} /></button>
     </div>
   );
 }
@@ -2510,7 +2534,8 @@ function CustoRow({ custo, onDelete, onToggleRessarcimento, onTogglePagamento, o
   const isParcelado = custo.formaPagamento === "parcelado" && custo.parcelas && custo.parcelas.length > 0;
   return (
     <div className="flex flex-col gap-1 rounded-md p-3" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4" }}>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
         {custo.imagemThumb ? <img src={custo.imagemThumb} alt="" onClick={() => onAbrirImagem(custo.imagemThumb)} className="w-10 h-10 object-cover rounded shrink-0 cursor-zoom-in" style={{ border: "1px solid #D9D3C4" }} />
           : <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: isFuel || isPedagio ? "#F0E4D2" : "#E4E8E2" }}><IconTipo size={16} style={{ color: isFuel || isPedagio ? "#B5762A" : "#4C7A5E" }} /></div>}
         <div className="flex-1 min-w-0">
@@ -2531,7 +2556,7 @@ function CustoRow({ custo, onDelete, onToggleRessarcimento, onTogglePagamento, o
               <span className="text-[10px] px-1.5 py-0.5 rounded" style={{ background: "#F4F1E8", color: "#8A8577" }}>Despesas gerais</span>
             )}
           </div>
-          <div className="text-xs truncate" style={{ color: "#8A8577" }}>
+          <div className="text-xs break-words sm:truncate" style={{ color: "#8A8577" }}>
             {[
               custo.data && new Date(custo.data + "T00:00:00").toLocaleDateString("pt-BR"),
               custo.posto, custo.fornecedor, custo.descricao, custo.veiculo,
@@ -2542,11 +2567,14 @@ function CustoRow({ custo, onDelete, onToggleRessarcimento, onTogglePagamento, o
             ].filter(Boolean).join(" · ")}
           </div>
         </div>
+        </div>
+        <div className="flex items-center justify-end gap-2 shrink-0 flex-wrap">
         {custo.pagoPor === "motorista"
           ? <button onClick={() => onToggleRessarcimento(custo)} className="shrink-0"><RessarcimentoTag status={liquidado ? "ressarcido" : "pendente"} /></button>
           : !isParcelado && <button onClick={() => onTogglePagamento(custo)} className="shrink-0"><StampBadge status={liquidado ? "pago" : "pendente"} /></button>}
         {onOpen && <button onClick={() => onOpen(custo)} className="shrink-0 p-1.5 rounded hover:opacity-70" style={{ color: "#8A8577" }}><IconEdit size={14} /></button>}
         <button onClick={() => onDelete(custo.id)} className="shrink-0 p-1.5 rounded hover:opacity-70" style={{ color: "#8A8577" }}><IconTrash size={15} /></button>
+        </div>
       </div>
       {diff !== 0 && (
         <div className="text-xs" style={{ color: diff > 0 ? "#B5473A" : "#4C7A5E" }}>
@@ -2606,7 +2634,8 @@ function ComissaoRow({ frete, onOpenPagamento, onToggleReverter, onAbrirImagem, 
   const diff = diferencaReembolso(item);
   return (
     <div className="flex flex-col gap-1 rounded-md p-3" style={{ background: "#FFFFFF", border: "1px solid #D9D3C4" }}>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3">
+        <div className="flex items-start gap-3 min-w-0 flex-1">
         <div className="w-9 h-9 rounded-full flex items-center justify-center shrink-0" style={{ background: "#E4E8E2" }}>
           <IconUser size={16} style={{ color: "#4C7A5E" }} />
         </div>
@@ -2622,7 +2651,10 @@ function ComissaoRow({ frete, onOpenPagamento, onToggleReverter, onAbrirImagem, 
             </span>
           </div>
         </div>
-        <button onClick={() => (liquidado ? onToggleReverter(frete) : onOpenPagamento(frete))} className="shrink-0"><RessarcimentoTag status={liquidado ? "ressarcido" : "pendente"} /></button>
+        </div>
+        <div className="flex items-center justify-end shrink-0">
+          <button onClick={() => (liquidado ? onToggleReverter(frete) : onOpenPagamento(frete))} className="shrink-0"><RessarcimentoTag status={liquidado ? "ressarcido" : "pendente"} /></button>
+        </div>
       </div>
       {diff !== 0 && (
         <div className="text-xs" style={{ color: diff > 0 ? "#B5473A" : "#4C7A5E" }}>
@@ -2824,11 +2856,12 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
       <div className="text-lg font-semibold" style={{ color: cor, fontFamily: "'JetBrains Mono', monospace" }}>{currency(valor)}</div>
     </div>
   );
+  const dataBR = (d) => (d ? new Date(String(d).slice(0, 10) + "T00:00:00").toLocaleDateString("pt-BR") : "—");
   const Th = ({ children, r }) => (
     <th className="px-2 py-1.5 text-[10px] uppercase tracking-wide" style={{ background: "#1C1E22", color: "#F4F1E8", textAlign: r ? "right" : "left" }}>{children}</th>
   );
-  const Td = ({ children, r, cor, mono }) => (
-    <td className="px-2 py-1.5 text-xs" style={{ borderTop: "1px solid #EDE8DA", textAlign: r ? "right" : "left", color: cor || "#24221D", fontFamily: mono ? "'JetBrains Mono', monospace" : "inherit", whiteSpace: r ? "nowrap" : "normal" }}>{children}</td>
+  const Td = ({ children, r, cor, mono, rot }) => (
+    <td data-rot={rot || ""} className="px-2 py-1.5 text-xs" style={{ borderTop: "1px solid #EDE8DA", textAlign: r ? "right" : "left", color: cor || "#24221D", fontFamily: mono ? "'JetBrains Mono', monospace" : "inherit", whiteSpace: r ? "nowrap" : "normal" }}>{children}</td>
   );
 
   return (
@@ -2847,17 +2880,17 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
         <div className="text-[11px] mb-1.5" style={{ color: "#8A8577" }}>
           É nesta ordem que o próximo depósito deve ir abatendo.
         </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #D9D3C4", minWidth: 520 }}>
+        <div className="rolagem-resp" style={{ overflowX: "auto" }}>
+          <table className="tab-resp" style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #D9D3C4", minWidth: 520 }}>
             <thead><tr><Th>Data</Th><Th>O que é</Th><Th>Container</Th><Th r>Devido</Th><Th r>Pago</Th><Th r>Falta</Th></tr></thead>
             <tbody>
               {pendentes.length ? pendentes.map((p, i) => (
                 <tr key={i}>
-                  <Td>{p.data}</Td><Td>{p.rotulo}</Td>
-                  <Td mono>{p.container}</Td>
-                  <Td r mono>{currency(p.devido)}</Td>
-                  <Td r mono cor="#4C7A5E">{currency(p.pago)}</Td>
-                  <Td r mono cor="#B5473A">{currency(p.falta)}</Td>
+                  <Td rot="Data">{dataBR(p.data)}</Td><Td rot="O que é">{p.rotulo}</Td>
+                  <Td rot="Container" mono>{p.container}</Td>
+                  <Td rot="Devido" r mono>{currency(p.devido)}</Td>
+                  <Td rot="Pago" r mono cor="#4C7A5E">{currency(p.pago)}</Td>
+                  <Td rot="Falta" r mono cor="#B5473A">{currency(p.falta)}</Td>
                 </tr>
               )) : <tr><Td>Nada em aberto — a conta está zerada.</Td></tr>}
             </tbody>
@@ -2876,7 +2909,7 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
             <div key={id} className="rounded-lg p-2.5 mb-2" style={{ background: "#fff", border: "1px solid #D9D3C4" }}>
               <div className="text-xs mb-1">
                 <b style={{ fontFamily: "'JetBrains Mono', monospace", color: "#B5762A" }}>{currency(l.total || soma)}</b>
-                {" em " + (l.data || "—")}
+                {" em " + dataBR(l.data)}
                 <span style={{ color: fecha ? "#4C7A5E" : "#B5473A", marginLeft: 8 }}>
                   {fecha ? "confere" : "NÃO FECHA"}
                 </span>
@@ -2896,8 +2929,8 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
         <div className="text-sm font-semibold mb-1" style={{ fontFamily: "'Oswald', sans-serif" }}>
           3 · Comissão por frete
         </div>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #D9D3C4", minWidth: 520 }}>
+        <div className="rolagem-resp" style={{ overflowX: "auto" }}>
+          <table className="tab-resp" style={{ width: "100%", borderCollapse: "collapse", background: "#fff", border: "1px solid #D9D3C4", minWidth: 520 }}>
             <thead><tr><Th>Data</Th><Th>Container</Th><Th r>Frete</Th><Th r>Comissão</Th><Th r>Paga</Th><Th r>Falta</Th></tr></thead>
             <tbody>
               {fretes.filter(f => bate(f.motorista) && (f.comissaoMotorista || 0) > 0)
@@ -2908,12 +2941,12 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
                   const falta = Math.max(it.valor - pg, 0);
                   return (
                     <tr key={f.id}>
-                      <Td>{f.dataTiquete}</Td>
-                      <Td mono>{f.numeroContainer || "TBN"}</Td>
-                      <Td r mono>{currency(f.valorFrete)}</Td>
-                      <Td r mono>{currency(it.valor)}</Td>
-                      <Td r mono cor="#4C7A5E">{currency(pg)}</Td>
-                      <Td r mono cor={falta > 0.004 ? "#B5473A" : "#8A8577"}>{currency(falta)}</Td>
+                      <Td rot="Data">{dataBR(f.dataTiquete)}</Td>
+                      <Td rot="Container" mono>{f.numeroContainer || "TBN"}</Td>
+                      <Td rot="Frete" r mono>{currency(f.valorFrete)}</Td>
+                      <Td rot="Comissão" r mono>{currency(it.valor)}</Td>
+                      <Td rot="Paga" r mono cor="#4C7A5E">{currency(pg)}</Td>
+                      <Td rot="Falta" r mono cor={falta > 0.004 ? "#B5473A" : "#8A8577"}>{currency(falta)}</Td>
                     </tr>
                   );
                 })}
@@ -4185,11 +4218,11 @@ function ControleFretes() {
         {config.caminhoes.map((c) => <option key={c} value={c} />)}
       </datalist>
       <div style={{ background: "#1C1E22" }} className="px-4 sm:px-6 py-5 no-print">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
+        <div className="max-w-3xl mx-auto flex flex-wrap items-center justify-between gap-y-3">
+          <div className="flex items-center gap-3 min-w-0">
             <LogoMark size={42} />
             <div className="flex flex-col leading-none">
-              <span className="text-xl sm:text-2xl tracking-[0.08em]" style={{ fontFamily: "'Oswald', sans-serif", color: "#F4F1E8", fontWeight: 700 }}>
+              <span className="text-xl sm:text-2xl tracking-[0.08em] whitespace-nowrap" style={{ fontFamily: "'Oswald', sans-serif", color: "#F4F1E8", fontWeight: 700 }}>
                 PAINEL <span style={{ color: "#E8A33D" }}>DE BORDO</span>
               </span>
               <div className="flex items-center gap-1.5 mt-1">
@@ -4198,7 +4231,7 @@ function ControleFretes() {
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 w-full sm:w-auto justify-end flex-wrap">
             {tab === "dashboard" && (
               <>
                 <button onClick={() => window.print()} title="Exportar PDF do resumo" className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold text-white" style={{ background: "#B5762A", fontFamily: "'Oswald', sans-serif" }}>
@@ -4379,8 +4412,8 @@ function ControleFretes() {
                 <div className="px-3 py-3 text-xs" style={{ color: "#8A8577" }}>Nenhuma viagem no período selecionado.</div>
               ) : (
                 <>
-                  <div className="px-3 pt-2 grid gap-x-1 gap-y-2" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
-                    <div className="grid gap-x-1" style={{ gridColumn: "1 / -1", gridTemplateColumns: "repeat(6, 1fr)" }}>
+                  <div className="px-3 pt-2 grid gap-x-1 gap-y-2 grade-dre" style={{ gridTemplateColumns: "repeat(6, 1fr)" }}>
+                    <div className="hidden sm:grid gap-x-1" style={{ gridColumn: "1 / -1", gridTemplateColumns: "repeat(6, 1fr)" }}>
                       {[["Frete", IconTrendUp], ["Comissão", IconUser], ["Combustível", IconFuel], ["Pedágio", IconToll], ["Manutenção", IconWrench], ["Saldo", IconCheck]].map(([label, Ic]) => (
                         <div key={label} title={label} className="flex items-center gap-1 text-[10px] uppercase font-semibold" style={{ color: "#8A8577" }}>
                           <Ic size={11} />
@@ -4401,12 +4434,29 @@ function ControleFretes() {
                             <span style={{ color: "#8A8577" }}>Container {f.numeroContainer || "TBN"}</span>
                             {f.cliente && <span style={{ color: "#8A8577" }}>· {f.cliente}</span>}
                           </div>
-                          <div className="text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#24221D" }}>{currency(f.valorFrete)}</div>
-                          <div className="text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(comissaoTotal)}</div>
-                          <div className="text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(combustivelTotal)}</div>
-                          <div className="text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(pedagioTotal)}</div>
-                          <div className="text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(manutencaoTotal)}</div>
-                          <div className="text-[11px] text-right font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: resultadoBruto >= 0 ? "#4C7A5E" : "#B5473A" }}>
+                          {/* celular: uma linha por valor, com o nome do lado */}
+                          <div className="sm:hidden text-[11px]" style={{ gridColumn: "1 / -1" }}>
+                            {[["Frete", f.valorFrete, "#24221D"], ["Comissão", comissaoTotal, "#8A8577"],
+                              ["Combustível", combustivelTotal, "#8A8577"], ["Pedágio", pedagioTotal, "#8A8577"],
+                              ["Manutenção", manutencaoTotal, "#8A8577"]].map(([rot, val, cor]) => (
+                              <div key={rot} className="flex items-baseline justify-between gap-3">
+                                <span style={{ color: "#8A8577" }}>{rot}</span>
+                                <span style={{ fontFamily: "'JetBrains Mono', monospace", color: cor }}>{currency(val)}</span>
+                              </div>
+                            ))}
+                            <div className="flex items-baseline justify-between gap-3 font-bold" style={{ borderTop: "1px solid #EFEAE0", marginTop: 2, paddingTop: 2 }}>
+                              <span style={{ color: "#24221D" }}>Saldo</span>
+                              <span style={{ fontFamily: "'JetBrains Mono', monospace", color: resultadoBruto >= 0 ? "#4C7A5E" : "#B5473A" }}>
+                                {currency(resultadoBruto)}{dre.temPendencia && <span style={{ color: "#B5762A", fontWeight: 400 }}> *</span>}
+                              </span>
+                            </div>
+                          </div>
+                          <div className="hidden sm:block text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#24221D" }}>{currency(f.valorFrete)}</div>
+                          <div className="hidden sm:block text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(comissaoTotal)}</div>
+                          <div className="hidden sm:block text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(combustivelTotal)}</div>
+                          <div className="hidden sm:block text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(pedagioTotal)}</div>
+                          <div className="hidden sm:block text-[11px] text-right" style={{ fontFamily: "'JetBrains Mono', monospace", color: "#8A8577" }}>{currency(manutencaoTotal)}</div>
+                          <div className="hidden sm:block text-[11px] text-right font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: resultadoBruto >= 0 ? "#4C7A5E" : "#B5473A" }}>
                             {currency(resultadoBruto)}{dre.temPendencia && <span style={{ color: "#B5762A", fontWeight: 400 }}> *</span>}
                           </div>
                         </React.Fragment>
@@ -4705,8 +4755,8 @@ function ControleFretes() {
                     return (
                       <div className="px-3 pb-3 no-motorista-extrato">
                         <div className="text-[11px] font-semibold uppercase tracking-wide mb-1.5" style={{ color: "#8A8577" }}>Extrato cronológico — saldo acumulado a pagar ao motorista</div>
-                        <div className="overflow-x-auto rounded-md" style={{ border: "1px solid #D9D3C4" }}>
-                          <table className="text-xs" style={{ minWidth: "560px", width: "100%" }}>
+                        <div className="overflow-x-auto rolagem-resp rounded-md" style={{ border: "1px solid #D9D3C4" }}>
+                          <table className="text-xs tab-resp" style={{ minWidth: "560px", width: "100%" }}>
                             <thead><tr style={{ color: "#8A8577" }}>
                               <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Data</th>
                               <th className="px-3 py-2 text-left font-medium whitespace-nowrap">Lançamento</th>
@@ -4717,13 +4767,13 @@ function ControleFretes() {
                             <tbody>
                               {extrato.map((l, i) => (
                                 <tr key={i} style={{ borderTop: "1px solid #EFEAE0" }}>
-                                  <td className="px-3 py-1.5" style={{ color: "#8A8577" }}>{l.data ? new Date(l.data + "T00:00:00").toLocaleDateString("pt-BR") : "—"}</td>
-                                  <td className="px-3 py-1.5 font-semibold" style={{ color: l.cor === "saida" ? "#B5473A" : "#4C7A5E" }}>{l.tipo}</td>
-                                  <td className="px-3 py-1.5" style={{ color: "#8A8577" }}>{l.descricao}</td>
-                                  <td className="px-2 py-1.5 text-right font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", color: l.cor === "saida" ? "#B5473A" : "#4C7A5E" }}>
+                                  <td data-rot="Data" className="px-3 py-1.5" style={{ color: "#8A8577" }}>{l.data ? new Date(l.data + "T00:00:00").toLocaleDateString("pt-BR") : "—"}</td>
+                                  <td data-rot="Lançamento" className="px-3 py-1.5 font-semibold" style={{ color: l.cor === "saida" ? "#B5473A" : "#4C7A5E" }}>{l.tipo}</td>
+                                  <td data-rot="Descrição" className="px-3 py-1.5" style={{ color: "#8A8577" }}>{l.descricao}</td>
+                                  <td data-rot="Valor" className="px-2 py-1.5 text-right font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", color: l.cor === "saida" ? "#B5473A" : "#4C7A5E" }}>
                                     {l.efeito > 0 ? "+ " : "− "}{currency(l.valor)}
                                   </td>
-                                  <td className="px-3 py-1.5 text-right font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: l.saldoAcumulado >= 0 ? "#B5473A" : "#4C7A5E" }}>{currency(l.saldoAcumulado)}</td>
+                                  <td data-rot="Saldo acumulado" className="px-3 py-1.5 text-right font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: l.saldoAcumulado >= 0 ? "#B5473A" : "#4C7A5E" }}>{currency(l.saldoAcumulado)}</td>
                                 </tr>
                               ))}
                             </tbody>
