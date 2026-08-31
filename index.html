@@ -158,7 +158,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v42";
+const APP_VERSION = "v43";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -2912,21 +2912,108 @@ function DataPagamentoModal({ titulo, valorPadrao, onConfirm, onClose }) {
 }
 
 function ImageLightbox({ src, onClose }) {
+  // zoom: 1 = cabe na tela; acima disso a imagem cresce e o quadro rola.
+  // No celular ler um comprovante inteirinho na largura da tela e impossivel,
+  // entao um toque na imagem ja pula para 2x, e os botoes ajustam de 1x a 5x.
+  const [zoom, setZoom] = useState(1);
+  const caixaRef = useRef(null);
+  useEffect(() => { setZoom(1); }, [src]);
   if (!src) return null;
+
+  const ehPdf = typeof src === "string" && src.startsWith("data:application/pdf");
+
   const baixar = (e) => {
     e.stopPropagation();
     const a = document.createElement("a");
     a.href = src;
-    a.download = `imagem-${dataHojeISO()}.jpg`;
+    a.download = "documento-" + dataHojeISO() + (ehPdf ? ".pdf" : ".jpg");
     a.click();
   };
+
+  const limitar = (v) => Math.min(5, Math.max(1, Number(Number(v).toFixed(2))));
+  // passo relativo ao valor ATUAL do estado: dois toques seguidos no "+"
+  // precisam somar dois passos, e nao um so por causa do lote do React
+  const passoZoom = (delta) => setZoom((z) => limitar(z + delta));
+
+  const mudarZoom = (novo) => {
+    const alvo = limitar(novo);
+    const caixa = caixaRef.current;
+    // mantem o centro do que esta na tela ao aproximar
+    const antes = caixa ? {
+      x: (caixa.scrollLeft + caixa.clientWidth / 2) / Math.max(1, caixa.scrollWidth),
+      y: (caixa.scrollTop + caixa.clientHeight / 2) / Math.max(1, caixa.scrollHeight)
+    } : null;
+    setZoom(alvo);
+    if (caixa && antes) {
+      requestAnimationFrame(() => {
+        caixa.scrollLeft = antes.x * caixa.scrollWidth - caixa.clientWidth / 2;
+        caixa.scrollTop = antes.y * caixa.scrollHeight - caixa.clientHeight / 2;
+      });
+    }
+  };
+
+  const Botao = ({ children, onClick, titulo }) => (
+    <button onClick={(e) => { e.stopPropagation(); onClick(); }} title={titulo}
+      className="text-white/85 hover:text-white flex items-center gap-1.5 text-xs px-3 py-2 rounded-md"
+      style={{ background: "rgba(255,255,255,0.16)" }}>
+      {children}
+    </button>
+  );
+
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center p-6" style={{ background: "rgba(0,0,0,0.85)" }} onClick={onClose}>
-      <img src={src} alt="ampliada" className="max-w-full max-h-full rounded" style={{ objectFit: "contain" }} onClick={(e) => e.stopPropagation()} />
-      <button onClick={baixar} className="absolute top-4 right-16 text-white/80 hover:text-white flex items-center gap-1.5 text-xs px-3 py-2 rounded-md" style={{ background: "rgba(255,255,255,0.15)" }}>
-        <IconDownload size={16} /> Baixar arquivo
-      </button>
-      <button onClick={onClose} className="absolute top-4 right-4 text-white/80 hover:text-white"><IconX size={24} /></button>
+    <div className="fixed inset-0 z-[60] flex flex-col" style={{ background: "rgba(0,0,0,0.92)" }} onClick={onClose}>
+      <div className="flex items-center justify-end gap-2 p-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+        {!ehPdf && (
+          <>
+            <Botao onClick={() => passoZoom(-0.5)} titulo="Afastar">−</Botao>
+            <span className="text-white/70 text-xs" style={{ minWidth: 44, textAlign: "center", fontFamily: "'JetBrains Mono', monospace" }}>
+              {Math.round(zoom * 100)}%
+            </span>
+            <Botao onClick={() => passoZoom(0.5)} titulo="Aproximar">+</Botao>
+            <Botao onClick={() => mudarZoom(1)} titulo="Voltar ao tamanho da tela">Ajustar</Botao>
+          </>
+        )}
+        <Botao onClick={() => baixar({ stopPropagation: () => {} })} titulo="Baixar o arquivo">
+          <IconDownload size={15} /> Baixar
+        </Botao>
+        <button onClick={onClose} className="text-white/85 hover:text-white p-2"><IconX size={22} /></button>
+      </div>
+
+      {ehPdf ? (
+        <div className="flex-1 min-h-0 p-3 pt-0" onClick={(e) => e.stopPropagation()}>
+          <object data={src} type="application/pdf" style={{ width: "100%", height: "100%", borderRadius: 8, background: "#fff" }}>
+            <div className="text-white/80 text-sm p-4">
+              Este navegador não abre PDF aqui dentro. Use o botão <b>Baixar</b> acima.
+            </div>
+          </object>
+        </div>
+      ) : (
+        <div
+          ref={caixaRef}
+          className="flex-1 min-h-0"
+          style={{ overflow: "auto", WebkitOverflowScrolling: "touch", padding: 12 }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <img
+            src={src}
+            alt="documento ampliado"
+            onClick={() => mudarZoom(zoom >= 2 ? 1 : 2)}
+            style={{
+              display: "block",
+              margin: zoom <= 1 ? "auto" : "0 auto",
+              width: zoom <= 1 ? "auto" : (zoom * 100) + "%",
+              maxWidth: zoom <= 1 ? "100%" : "none",
+              maxHeight: zoom <= 1 ? "100%" : "none",
+              borderRadius: 8,
+              cursor: zoom >= 2 ? "zoom-out" : "zoom-in"
+            }}
+          />
+        </div>
+      )}
+
+      <div className="text-center text-white/45 text-[11px] pb-3 shrink-0" onClick={(e) => e.stopPropagation()}>
+        {ehPdf ? "PDF do documento" : "Toque na imagem para aproximar · arraste para andar pelo documento"}
+      </div>
     </div>
   );
 }
@@ -3148,7 +3235,7 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
   );
 }
 
-function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, onPagamento, config }) {
+function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, onPagamento, onAbrirImagem, config }) {
   const [estado, setEstado] = useState("parado");   // parado | buscando | pronto | erro
   const [erro, setErro] = useState("");
   const [itens, setItens] = useState([]);
@@ -3209,8 +3296,10 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
             continue;
           }
           const dataUrl = await blobParaDataUrl(blob);
-          linha.thumb = a.name.toLowerCase().endsWith(".pdf") ? null : await resizeImage(dataUrl);
           linha.ehPdf = a.name.toLowerCase().endsWith(".pdf");
+          linha.thumb = linha.ehPdf ? null : await resizeImage(dataUrl);
+          // copia maior, so para olhar na lupa - nao vai para o lancamento
+          linha.grande = linha.ehPdf ? dataUrl : ((await resizeImage(dataUrl, 1600)) || dataUrl);
           // ja lido antes? entao nao paga de novo
           const guardado = hash ? cacheIa[hash] : null;
           let r;
@@ -3405,11 +3494,23 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
              style={{ background: "var(--superficie)",
                       border: "1px solid " + (it.estado === "duplicado" ? "var(--erro-borda)" : "var(--borda)"),
                       opacity: it.estado === "lancado" ? 0.55 : 1 }}>
-          <div style={{ width: 64, minWidth: 64, height: 64, background: "var(--linha)", borderRadius: 6,
-                        overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <button
+            onClick={() => it.grande && onAbrirImagem && onAbrirImagem(it.grande)}
+            disabled={!it.grande}
+            title={it.grande ? "Tocar para ver o documento inteiro" : ""}
+            style={{ width: 64, minWidth: 64, height: 64, background: "var(--linha)", borderRadius: 6,
+                     overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center",
+                     border: "1px solid var(--borda)", padding: 0, position: "relative",
+                     cursor: it.grande ? "zoom-in" : "default" }}>
             {it.thumb ? <img src={it.thumb} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                       : <span className="text-[10px]" style={{ color: "var(--suave)" }}>{it.ehPdf ? "PDF" : "..."}</span>}
-          </div>
+            {it.grande && (
+              <span style={{ position: "absolute", right: 2, bottom: 2, background: "rgba(0,0,0,0.6)",
+                             borderRadius: 4, padding: "1px 3px", lineHeight: 1, color: "#fff" }}>
+                <IconEye size={11} />
+              </span>
+            )}
+          </button>
           <div className="flex-1" style={{ minWidth: 0 }}>
             <div className="text-[11px] truncate" style={{ color: "var(--suave)" }}>
               {it.nome}
@@ -4931,6 +5032,7 @@ function ControleFretes() {
             onMarcarRecebido={(id, data) =>
               persistFretes(fretes.map(f => f.id === id ? { ...f, status: "pago", dataPagamento: data } : f))}
             onPagamento={abrirPagamentoDaEntrada}
+            onAbrirImagem={setImagemAmpliada}
           />
         ) : tab === "motorista" ? (
           <div className="flex flex-col gap-4">
