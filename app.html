@@ -162,7 +162,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v49";
+const APP_VERSION = "v50";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -620,7 +620,7 @@ function cacheIaLimpar() {
   try { localStorage.removeItem(LS_CACHE_IA); return true; } catch (e) { return false; }
 }
 
-async function classificarDocumento(dataUrl, nome) {
+async function classificarDocumento(dataUrl, nome, ctx) {
   const preparada = await prepararImagemParaIA(dataUrl, nome);
   const { media_type, data } = preparada;
   const bloco = preparada.pdf
@@ -637,12 +637,22 @@ async function classificarDocumento(dataUrl, nome) {
         '  "tipoCusto": ("combustivel"|"pedagio"|"manutencao"|""),\n' +
         '  "valor": (número), "data": ("AAAA-MM-DD" ou ""), "numeroContainer": (string ou ""),\n' +
         '  "cteNumero": (string ou ""), "cliente": (string ou ""), "fornecedor": (posto/oficina ou ""),\n' +
-        '  "pagador": (string ou ""), "recebedor": (string ou ""),\n' +
+        '  "pagador": (string ou ""), "recebedor": (string ou ""), "direcao": ("entrada"|"saida"|""),\n' +
         '  "litros": (número ou 0), "descricao": (string curta) }\n\n' +
-        "REGRA IMPORTANTE: um comprovante bancário (PIX/TED/transferência) NUNCA é despesa — " +
-        "ele só movimenta dinheiro, então a categoria é pagamento ou recebimento. " +
-        "Só nota fiscal, cupom ou recibo do fornecedor é despesa. " +
-        "Tíquete/CTe da transportadora é frete."
+        "QUEM É QUEM neste sistema:\n" +
+        "- EMPRESA (dona do sistema): " + ((ctx && ctx.empresa) || "a transportadora") + "\n" +
+        "- CLIENTE que contrata os fretes e PAGA a empresa: " + ((ctx && ctx.cliente) || "o embarcador") + "\n" +
+        "- MOTORISTA que a empresa PAGA: " + ((ctx && ctx.motorista) || "o motorista") + "\n\n" +
+        "REGRA 1 — comprovante bancário (PIX/TED/transferência/depósito) NUNCA é despesa. " +
+        "Ele só movimenta dinheiro. Decida pelo SENTIDO do dinheiro:\n" +
+        "  * dinheiro ENTRA na EMPRESA (ela é a favorecida/creditada, ou quem pagou foi o CLIENTE) " +
+        "    => \"categoria\": \"recebimento\", \"direcao\": \"entrada\"\n" +
+        "  * dinheiro SAI da EMPRESA (ela é a pagadora/debitada; favorecido é o motorista, " +
+        "    um posto, uma oficina) => \"categoria\": \"pagamento\", \"direcao\": \"saida\"\n" +
+        "Preencha SEMPRE \"pagador\" e \"recebedor\" com os nomes que aparecem no comprovante, " +
+        "mesmo abreviados ou parciais.\n" +
+        "REGRA 2 — só nota fiscal, cupom ou recibo do fornecedor é despesa.\n" +
+        "REGRA 3 — tíquete/CTe da transportadora é frete."
     }
   ]);
 }
@@ -2378,6 +2388,161 @@ function CustoDetailModal({ custo, fretesDisponiveis, onClose, onSave, onDelete 
    total dele, para poder mostrar em qualquer tela quais
    documentos aquele mesmo comprovante quitou.
 =========================================================== */
+/* ===========================================================
+   RECEBIMENTO DE FRETE — dinheiro que ENTRA
+   A transportadora paga a empresa em valores fechados, que cobrem varios
+   fretes de uma vez. Esta tela e o espelho do rateio de despesas: recebe o
+   valor do comprovante e marca quais fretes ele quita, do mais antigo para o
+   mais novo. Sem ela, um comprovante de recebimento caia na tela de rateio de
+   despesas, que so sabe abater dinheiro que SAI.
+=========================================================== */
+function RecebimentoFreteModal({ fretesAbertos, prefill, onClose, onConfirm }) {
+  const [valor, setValor] = useState(prefill ? String(prefill.valor || "") : "");
+  const [data, setData] = useState((prefill && prefill.data) || dataHojeISO());
+  const [thumb, setThumb] = useState((prefill && prefill.thumb) || null);
+  const [sel, setSel] = useState([]);
+  const [tocou, setTocou] = useState(false);
+  const fileRef = useRef(null);
+
+  const emOrdem = fretesAbertos.slice().sort((a, b) =>
+    (a.dataTiquete || "").localeCompare(b.dataTiquete || ""));
+  const recebido = Number(String(valor).replace(",", ".")) || 0;
+
+  // Sugestao automatica: vai marcando do mais antigo enquanto couber no valor
+  // recebido. O Alexandre confere e ajusta; nada e marcado sem ele ver.
+  useEffect(() => {
+    if (tocou || !recebido) return;
+    let resta = recebido + 0.005;
+    const escolhidos = [];
+    emOrdem.forEach(f => {
+      const v = Number(f.valorFrete) || 0;
+      if (v > 0 && v <= resta) { escolhidos.push(f.id); resta -= v; }
+    });
+    setSel(escolhidos);
+  }, [recebido, tocou, fretesAbertos.length]);
+
+  const alterna = (id) => { setTocou(true); setSel(s => s.indexOf(id) >= 0 ? s.filter(x => x !== id) : s.concat([id])); };
+  const somaSel = emOrdem.filter(f => sel.indexOf(f.id) >= 0).reduce((t, f) => t + (Number(f.valorFrete) || 0), 0);
+  const diferenca = recebido - somaSel;
+
+  const lerArquivo = (file) => {
+    if (!file) return;
+    const fr = new FileReader();
+    fr.onload = () => setThumb(String(fr.result));
+    fr.readAsDataURL(file);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(28,30,34,0.7)" }}>
+      <div className="w-full max-w-md rounded-lg overflow-hidden flex flex-col max-h-[92vh]" style={{ background: "var(--fundo)", border: "1px solid var(--borda)" }}>
+        <div className="flex items-center justify-between px-4 py-3" style={{ background: "var(--barra)" }}>
+          <span className="text-sm font-semibold uppercase tracking-wider" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--na-barra)" }}>
+            Recebimento de frete
+          </span>
+          <button onClick={onClose} style={{ color: "var(--na-barra)" }}><IconX size={18} /></button>
+        </div>
+
+        <div className="p-4 overflow-y-auto flex flex-col gap-3">
+          <p className="text-xs" style={{ color: "var(--suave)" }}>
+            Dinheiro que <b>entrou</b>. Marque os fretes que este depósito quita — do mais antigo para o mais novo.
+          </p>
+
+          <div className="flex items-center gap-2">
+            {thumb ? (
+              <img src={thumb} alt="comprovante" className="w-14 h-14 object-cover rounded shrink-0" style={{ border: "1px solid var(--borda)" }} />
+            ) : (
+              <button onClick={() => fileRef.current && fileRef.current.click()}
+                      className="w-14 h-14 rounded shrink-0 flex items-center justify-center border-2 border-dashed"
+                      style={{ borderColor: "var(--borda)", color: "var(--suave)" }}>
+                <IconUpload size={18} />
+              </button>
+            )}
+            <input ref={fileRef} type="file" accept="image/*,application/pdf" className="hidden"
+                   onChange={(e) => lerArquivo(e.target.files && e.target.files[0])} />
+            <div className="flex-1 grid grid-cols-2 gap-2">
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--suave)" }}>Valor recebido</span>
+                <input type="number" step="0.01" value={valor} onChange={(e) => { setValor(e.target.value); setTocou(false); }}
+                       className="px-2 py-1.5 rounded text-sm"
+                       style={{ background: "var(--superficie)", border: "1px solid var(--borda)", color: "var(--texto)", fontFamily: "'JetBrains Mono', monospace" }} />
+              </label>
+              <label className="flex flex-col gap-1">
+                <span className="text-[10px] uppercase tracking-wider" style={{ color: "var(--suave)" }}>Data</span>
+                <input type="date" value={data} onChange={(e) => setData(e.target.value)}
+                       className="px-2 py-1.5 rounded text-sm"
+                       style={{ background: "var(--superficie)", border: "1px solid var(--borda)", color: "var(--texto)" }} />
+              </label>
+            </div>
+          </div>
+
+          {emOrdem.length === 0 && (
+            <div className="text-sm py-6 text-center" style={{ color: "var(--suave)" }}>
+              Nenhum frete em aberto. Lance os tíquetes antes de dar baixa no recebimento.
+            </div>
+          )}
+
+          <div className="flex flex-col gap-1.5">
+            {emOrdem.map(f => {
+              const marcado = sel.indexOf(f.id) >= 0;
+              return (
+                <button key={f.id} onClick={() => alterna(f.id)}
+                        className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-left"
+                        style={{ background: marcado ? "var(--aba-ativa-bg)" : "var(--superficie)",
+                                 border: "1px solid " + (marcado ? "var(--acento)" : "var(--borda)") }}>
+                  <span className="w-4 h-4 rounded-sm shrink-0 flex items-center justify-center"
+                        style={{ border: "1px solid " + (marcado ? "var(--acento)" : "var(--borda)"), background: marcado ? "var(--acento)" : "transparent" }}>
+                    {marcado && <IconCheck size={11} style={{ color: "var(--sobre-acento)" }} />}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm font-semibold truncate" style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--texto)" }}>
+                      {f.numeroContainer || "TBN"}
+                    </span>
+                    <span className="block text-[11px]" style={{ color: "var(--suave)" }}>
+                      {f.dataTiquete ? new Date(f.dataTiquete + "T00:00:00").toLocaleDateString("pt-BR") : "sem data"}
+                      {f.cteNumero ? " · CTe " + f.cteNumero : ""}
+                    </span>
+                  </span>
+                  <span className="text-sm font-bold shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--texto)" }}>
+                    {currency(f.valorFrete)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="px-4 py-3 flex flex-col gap-2" style={{ background: "var(--superficie)", borderTop: "1px solid var(--borda)" }}>
+          <div className="flex items-center justify-between text-xs">
+            <span style={{ color: "var(--suave)" }}>{sel.length} frete(s) marcado(s)</span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--texto)" }}>{currency(somaSel)}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span style={{ color: "var(--suave)" }}>
+              {Math.abs(diferenca) < 0.005 ? "confere exatamente" : diferenca > 0 ? "sobra do depósito" : "falta para fechar"}
+            </span>
+            <span style={{ fontFamily: "'JetBrains Mono', monospace", color: Math.abs(diferenca) < 0.005 ? "var(--ok)" : "var(--perigo)" }}>
+              {currency(Math.abs(diferenca))}
+            </span>
+          </div>
+          {Math.abs(diferenca) >= 0.005 && sel.length > 0 && (
+            <div className="text-[11px]" style={{ color: "var(--acento)" }}>
+              {diferenca > 0
+                ? "O depósito é maior que os fretes marcados. Marque mais um, ou confirme assim e a sobra fica registrada no histórico."
+                : "Os fretes marcados somam mais que o depósito. Se a transportadora pagou parcial, desmarque algum."}
+            </div>
+          )}
+          <button onClick={() => onConfirm({ ids: sel, data, valorRecebido: recebido, comprovanteThumb: thumb })}
+                  disabled={sel.length === 0 || !data}
+                  className="w-full px-4 py-2.5 rounded-md text-sm font-semibold uppercase tracking-wide disabled:opacity-40"
+                  style={{ background: "var(--acento)", color: "var(--sobre-acento)", fontFamily: "'Oswald', sans-serif" }}>
+            Dar baixa em {sel.length} frete(s)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm, prefill }) {
   const ehMotorista = custo.pagoPor === "motorista";
   // prefill chega quando o comprovante veio da caixa de ENTRADA: o documento ja
@@ -3541,7 +3706,7 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
   );
 }
 
-function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, onPagamento, onAbrirImagem, dadosProntos, config }) {
+function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, onPagamento, onRecebimento, onAbrirImagem, dadosProntos, config }) {
   const [estado, setEstado] = useState("parado");   // parado | buscando | pronto | erro
   const [erro, setErro] = useState("");
   const [itens, setItens] = useState([]);
@@ -3563,6 +3728,41 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
     return Math.abs((d1 - d2) / 86400000);
   };
 
+  // Compara nomes de empresa de forma tolerante: ignora acento, pontuacao,
+  // e as palavras vazias (LTDA, ME, EIRELI, SA, TRANSPORTES...). "GOOD VIBE
+  // GENERAL STORE LTDA" casa com "GOOD VIBE GENERAL STORE" e com "GVGS" nao —
+  // por isso as siglas do config tambem entram na lista de apelidos.
+  const so = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9 ]/g, " ")
+    .replace(/\b(LTDA|ME|EPP|EIRELI|SA|S A|CIA|COMERCIO|TRANSPORTES|TRANSPORTE|LOGISTICA|DE|DA|DO|E)\b/g, " ")
+    .replace(/\s+/g, " ").trim();
+  const pareceMesmo = (a, b) => {
+    const x = so(a), y = so(b);
+    if (!x || !y) return false;
+    if (x === y) return true;
+    const px = x.split(" ").filter(w => w.length >= 4);
+    const py = y.split(" ").filter(w => w.length >= 4);
+    if (!px.length || !py.length) return false;
+    const iguais = px.filter(w => py.indexOf(w) >= 0).length;
+    return iguais >= Math.min(2, Math.min(px.length, py.length));
+  };
+  // true = dinheiro entrou na empresa; false = saiu; null = nao deu para saber.
+  const ehEntradaDeDinheiro = (r, linha) => {
+    const emp = config.nomeEmpresa || "";
+    const cli = config.clientePadrao || "";
+    const mots = config.motoristas || [];
+    const rec = (r && r.recebedor) || "";
+    const pag = (r && r.pagador) || "";
+    if (rec && mots.some(m => pareceMesmo(rec, m))) return false;
+    if (rec && emp && pareceMesmo(rec, emp)) return true;
+    if (pag && emp && pareceMesmo(pag, emp)) return false;
+    if (pag && cli && pareceMesmo(pag, cli)) return true;
+    if (rec && cli && pareceMesmo(rec, cli)) return false;
+    if (r && r.direcao === "entrada") return true;
+    if (r && r.direcao === "saida") return false;
+    return null;
+  };
+
   const jaExisteNoApp = (it) => {
     const v = Number(it.valor) || 0;
     if (!v || !it.data) return "";
@@ -3582,9 +3782,20 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
       if (achou) return `já existe o frete ${achou.numeroContainer || "TBN"} de ${currency(achou.valorFrete)} em ${achou.dataTiquete || "sem data"}`;
     }
     if (it.categoria === "despesa") {
-      const achou = custos.find(c => c.data === it.data && Math.abs((Number(c.valor) || 0) - v) < 0.01
-        && (!it.tipoCusto || c.tipo === it.tipoCusto));
-      if (achou) return `já existe um custo de ${achou.tipo} de ${currency(achou.valor)} em ${achou.data}`;
+      // Mesmo valor e mesmo tipo dentro de 7 dias ja e suspeito. O caso classico
+      // aqui e o combustivel: o motorista manda o TIQUETE do posto, e dias depois
+      // sai a NOTA FISCAL do mesmo abastecimento em nome da transportadora. Sao
+      // dois documentos do MESMO gasto — a nota substitui o tiquete, nao soma.
+      const achou = custos.find(c => Math.abs((Number(c.valor) || 0) - v) < 0.01
+        && (!it.tipoCusto || c.tipo === it.tipoCusto)
+        && diasEntre(c.data, it.data) <= 7);
+      if (achou) {
+        const quando = achou.data === it.data ? "na mesma data" : "em " + achou.data;
+        return (it.tipoCusto === "combustivel"
+          ? "já existe combustível de " + currency(achou.valor) + " " + quando
+            + " — se este for a NOTA FISCAL do mesmo abastecimento, NÃO lance: é o mesmo gasto"
+          : "já existe um custo de " + achou.tipo + " de " + currency(achou.valor) + " " + quando);
+      }
     }
     return "";
   };
@@ -3638,13 +3849,29 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
             linha.doCache = true;
             setLidosDoCache(n => n + 1);
           } else {
-            r = await classificarDocumento(dataUrl, a.name);
+            r = await classificarDocumento(dataUrl, a.name, {
+              empresa: config.nomeEmpresa || "",
+              cliente: config.clientePadrao || "",
+              motorista: (config.motoristas && config.motoristas[0]) || ""
+            });
             cacheIaGuardar(hash, r);
             cacheIa[hash] = { r, em: Date.now() };
           }
           linha.categoria = r.categoria || "despesa";
+          linha.pagador = r.pagador || "";
+          linha.recebedor = r.recebedor || "";
           if (r.tipoDocumento === "comprovante_bancario" && linha.categoria === "despesa") {
             linha.categoria = "pagamento";
+          }
+          // Sentido do dinheiro decidido aqui, sem depender so do julgamento da IA:
+          // se quem recebeu foi a EMPRESA, ou quem pagou foi o CLIENTE, isso e
+          // RECEBIMENTO DE FRETE, nunca pagamento de despesa. Foi essa a falha de
+          // 31/08/2026 — o comprovante da MRS para a GVGS abria a tela de rateio
+          // de despesas, que nao tem o que fazer com dinheiro que entra.
+          if (r.tipoDocumento === "comprovante_bancario") {
+            const ent = ehEntradaDeDinheiro(r, linha);
+            if (ent === true) linha.categoria = "recebimento";
+            else if (ent === false && linha.categoria === "recebimento") linha.categoria = "pagamento";
           }
           linha.tipoCusto = r.tipoCusto || "combustivel";
           linha.valor = Number(r.valor) || 0;
@@ -3655,10 +3882,13 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
           linha.fornecedor = r.fornecedor || "";
           linha.litros = Number(r.litros) || 0;
           linha.descricao = r.descricao || "";
-          linha.pagador = r.pagador || "";
-          linha.recebedor = r.recebedor || "";
           linha.aviso = jaExisteNoApp(linha);
           if (linha.aviso) { linha.estado = "duplicado"; linha.incluir = false; }
+          else if (linha.categoria === "recebimento") {
+            linha.estado = "recebimento";
+            linha.aviso = "dinheiro que ENTROU: toque em BAIXAR FRETES para dizer quais fretes ele quita";
+            linha.incluir = false;
+          }
           else if (linha.categoria === "pagamento") {
             // Depósito ao motorista / pagamento a fornecedor: abre a tela de rateio
             // aqui mesmo, com o comprovante já lido. Antes isso ficava para o
@@ -3766,6 +3996,24 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
 
   // Abre a tela de rateio ja com o comprovante lido. Quem grava e o
   // ControleFretes; aqui so marcamos a linha e tiramos o arquivo da ENTRADA.
+  // Espelho do acertarPagamento, para dinheiro que ENTRA.
+  const darBaixaRecebimento = (i) => {
+    const it = itens[i];
+    if (!it || !onRecebimento) return;
+    onRecebimento({
+      valor: Number(it.valor) || 0,
+      data: it.data,
+      thumb: it.thumb || null,
+      nome: it.nome,
+      pagador: it.pagador || "",
+      aoConfirmar: async () => {
+        if (it.hash) guardarProcessado(it.hash, { nome: it.nome, em: new Date().toISOString(), valor: it.valor });
+        await dropboxMoverParaLancados(it.caminho, nomePadronizadoApp(it));
+        setItens(atual => atual.map((x, j) => j === i ? { ...x, estado: "lancado" } : x));
+      }
+    });
+  };
+
   const acertarPagamento = (i) => {
     const it = itens[i];
     if (!it || !onPagamento) return;
@@ -3790,7 +4038,7 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
     setItens(novos);
   };
 
-  const prontos = itens.filter(x => x.estado === "pronto" || x.estado === "pagamento").length;
+  const prontos = itens.filter(x => x.estado === "pronto" || x.estado === "pagamento" || x.estado === "recebimento").length;
 
   return (
     <div className="flex flex-col gap-3">
@@ -3866,7 +4114,7 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
             </div>
             {it.estado === "lendo" && <div className="text-xs mt-1">lendo o documento...</div>}
             {it.estado === "lancado" && <div className="text-xs mt-1" style={{ color: "var(--ok)" }}>lançado ✓</div>}
-            {(it.estado === "pronto" || it.estado === "duplicado" || it.estado === "pagamento") && (
+            {(it.estado === "pronto" || it.estado === "duplicado" || it.estado === "pagamento" || it.estado === "recebimento") && (
               <>
                 <div className="flex flex-wrap gap-1.5 mt-1.5">
                   <select value={it.categoria} onChange={e => atualizar(i, "categoria", e.target.value)}
@@ -3899,12 +4147,16 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
                     {it.estado === "duplicado" ? "POSSÍVEL DUPLICATA — " : ""}{it.aviso}
                   </div>
                 )}
-                <button onClick={() => it.categoria === "pagamento" ? acertarPagamento(i) : lancar(i)}
+                <button onClick={() => it.categoria === "pagamento" ? acertarPagamento(i)
+                                     : it.categoria === "recebimento" ? darBaixaRecebimento(i)
+                                     : lancar(i)}
                   disabled={!it.valor || !it.data}
                   className="mt-2 px-3 py-1.5 rounded text-[11px] font-semibold uppercase text-white disabled:opacity-40"
-                  style={{ background: it.estado === "duplicado" ? "var(--perigo)" : "var(--acento)",
+                  style={{ background: it.estado === "duplicado" ? "var(--perigo)"
+                                     : it.categoria === "recebimento" ? "var(--ok)" : "var(--acento)",
                            fontFamily: "'Oswald', sans-serif" }}>
                   {it.categoria === "pagamento" ? "Acertar pagamento"
+                    : it.categoria === "recebimento" ? "Baixar fretes"
                     : it.estado === "duplicado" ? "Lançar mesmo assim" : "Lançar"}
                 </button>
               </>
@@ -4304,6 +4556,8 @@ function ControleFretes() {
   const [pagamentoAlvo, setPagamentoAlvo] = useState(null);
   // Quando o comprovante vem da caixa de ENTRADA, o rateio abre ja preenchido.
   const [pagamentoPrefill, setPagamentoPrefill] = useState(null);
+  const [recebimentoAberto, setRecebimentoAberto] = useState(false);
+  const [recebimentoPrefill, setRecebimentoPrefill] = useState(null);
   const [parcelaAlvo, setParcelaAlvo] = useState(null);
   const [dataPagamentoAlvo, setDataPagamentoAlvo] = useState(null);
 
@@ -4467,6 +4721,30 @@ function ControleFretes() {
     }
     setPagamentoPrefill(info);
     setPagamentoAlvo(fila[0]);
+  };
+
+  // Um comprovante de RECEBIMENTO lido na caixa de entrada abre a baixa de
+  // fretes. Espelho de abrirPagamentoDaEntrada, para o dinheiro que entra.
+  const abrirRecebimentoDaEntrada = (info) => {
+    if (fretes.filter(f => f.status !== "pago").length === 0) {
+      alert("Não há frete em aberto para dar baixa. Lance os tíquetes primeiro.");
+      return;
+    }
+    setRecebimentoPrefill(info);
+    setRecebimentoAberto(true);
+  };
+
+  const confirmarRecebimentoFrete = ({ ids, data, valorRecebido, comprovanteThumb }) => {
+    const loteId = uid();
+    persistFretes(fretes.map(f => ids.indexOf(f.id) >= 0
+      ? { ...f, status: "pago", dataPagamento: data,
+          recebimento: { loteId, data, valorLote: valorRecebido, comprovanteThumb } }
+      : f));
+    if (recebimentoPrefill && typeof recebimentoPrefill.aoConfirmar === "function") {
+      Promise.resolve(recebimentoPrefill.aoConfirmar()).catch(() => {});
+    }
+    setRecebimentoAberto(false);
+    setRecebimentoPrefill(null);
   };
 
   const confirmarPagamentoCusto = ({ data, comprovanteThumb, valorTotalComprovante, alocacoes, sobra, tipoParte, chaveParte }) => {
@@ -5295,9 +5573,16 @@ function ControleFretes() {
           </div>
         ) : tab === "fretes" ? (
           <div className="flex flex-col gap-3">
-            <button onClick={() => setShowAddFrete(true)} className="self-start flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-semibold text-white" style={{ background: "var(--acento)", fontFamily: "'Oswald', sans-serif" }}>
-              <IconPlus size={16} /> Adicionar tíquete
-            </button>
+            <div className="flex flex-wrap gap-2 no-print">
+              <button onClick={() => setShowAddFrete(true)} className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-semibold" style={{ background: "var(--acento)", color: "var(--sobre-acento)", fontFamily: "'Oswald', sans-serif" }}>
+                <IconPlus size={16} /> Adicionar tíquete
+              </button>
+              <button onClick={() => { setRecebimentoPrefill(null); setRecebimentoAberto(true); }}
+                      className="flex items-center gap-1.5 px-4 py-2 rounded-md text-sm font-semibold"
+                      style={{ background: "var(--superficie)", border: "1px solid var(--ok)", color: "var(--ok)", fontFamily: "'Oswald', sans-serif" }}>
+                <IconCheck size={16} /> Registrar recebimento
+              </button>
+            </div>
             <SeletorPeriodo periodoSel={fretePeriodo} onPeriodo={setFretePeriodo} ini={freteDataInicio} onIni={setFreteDataInicio} fim={freteDataFim} onFim={setFreteDataFim} />
             <div className="flex flex-wrap items-center gap-2 no-print">
               <button onClick={() => setShowContainerPicker(true)}
@@ -5448,6 +5733,7 @@ function ControleFretes() {
             onMarcarRecebido={(id, data) =>
               persistFretes(fretes.map(f => f.id === id ? { ...f, status: "pago", dataPagamento: data } : f))}
             onPagamento={abrirPagamentoDaEntrada}
+            onRecebimento={abrirRecebimentoDaEntrada}
             onAbrirImagem={setImagemAmpliada}
             dadosProntos={!dropboxEstaConectado() || dropboxCarregado}
           />
@@ -5750,6 +6036,14 @@ function ControleFretes() {
           prefill={pagamentoPrefill}
           onClose={() => { setPagamentoAlvo(null); setPagamentoPrefill(null); }}
           onConfirm={confirmarPagamentoCusto}
+        />
+      )}
+      {recebimentoAberto && (
+        <RecebimentoFreteModal
+          fretesAbertos={fretes.filter(f => f.status !== "pago")}
+          prefill={recebimentoPrefill}
+          onClose={() => { setRecebimentoAberto(false); setRecebimentoPrefill(null); }}
+          onConfirm={confirmarRecebimentoFrete}
         />
       )}
       {parcelaAlvo && (
