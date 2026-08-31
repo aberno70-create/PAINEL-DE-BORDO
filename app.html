@@ -158,7 +158,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v47";
+const APP_VERSION = "v48";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -1001,9 +1001,169 @@ function ConfigProvider({ children }) {
 }
 
 /* ===========================================================
+   CAÇA-DUPLICADOS
+   Um container é levado uma vez: se o número bate, é o mesmo
+   frete, ainda que a IA tenha lido um CTe diferente na segunda
+   foto do mesmo tíquete. Para despesa a régua é mais apertada -
+   tipo, data, valor e fornecedor iguais -, porque pedágio repete
+   de verdade (praça de ida e praça de volta).
+   Em cada grupo fica quem tem pagamento registrado; havendo
+   empate, fica o mais antigo.
+=========================================================== */
+function pontuacaoParaFicar(x) {
+  const pg = (x.comissaoPagamentos || x.pagamentos || []).length;
+  const temImagem = x.imagemThumb ? 1 : 0;
+  const temCte = (x.cteNumero || "").length > 0 ? 1 : 0;
+  return pg * 100 + temCte * 10 + temImagem;
+}
+
+function acharDuplicados(fretes, custos) {
+  const grupos = [];
+
+  const porContainer = {};
+  (fretes || []).forEach(f => {
+    const c = padronizarContainerApp(f.numeroContainer || "");
+    if (!c) return;
+    (porContainer[c] = porContainer[c] || []).push(f);
+  });
+  Object.keys(porContainer).forEach(c => {
+    const lista = porContainer[c];
+    if (lista.length < 2) return;
+    const ordenada = lista.slice().sort((a, b) => pontuacaoParaFicar(b) - pontuacaoParaFicar(a)
+      || String(a.dataCriacao || a.id).localeCompare(String(b.dataCriacao || b.id)));
+    grupos.push({
+      especie: "frete",
+      chave: c,
+      titulo: "Frete " + c,
+      detalhe: currency(ordenada[0].valorFrete) + " · " + (ordenada[0].dataTiquete || "sem data"),
+      ficar: ordenada[0],
+      sair: ordenada.slice(1),
+      sugerido: true
+    });
+  });
+
+  const porCusto = {};
+  (custos || []).forEach(x => {
+    const chave = [x.tipo, x.data, (Number(x.valor) || 0).toFixed(2),
+                   (x.fornecedor || x.posto || "").trim().toUpperCase()].join("|");
+    (porCusto[chave] = porCusto[chave] || []).push(x);
+  });
+  Object.keys(porCusto).forEach(k => {
+    const lista = porCusto[k];
+    if (lista.length < 2) return;
+    const ordenada = lista.slice().sort((a, b) => pontuacaoParaFicar(b) - pontuacaoParaFicar(a)
+      || String(a.id).localeCompare(String(b.id)));
+    const ehPedagio = ordenada[0].tipo === "pedagio";
+    grupos.push({
+      especie: "custo",
+      chave: k,
+      titulo: rotuloDoItem(ordenada[0]),
+      detalhe: currency(ordenada[0].valor) + " · " + (ordenada[0].data || "sem data"),
+      ficar: ordenada[0],
+      sair: ordenada.slice(1),
+      // pedagio repete de verdade: entra na lista, mas desmarcado
+      sugerido: !ehPedagio,
+      aviso: ehPedagio ? "pedágio repete de verdade (praça de ida e de volta) — confira antes de marcar" : ""
+    });
+  });
+
+  return grupos;
+}
+
+/* ===========================================================
    CONFIGURAÇÕES (chave de API + backup)
 =========================================================== */
-function SettingsModal({ onClose, fretes, custos, onImport, onLiberarEspaco, pastaHandle, pastaNome, pastaPrecisaReconectar, pastaStatus, conectarPasta, reconectarPasta, desconectarPasta, dropboxConectado, dropboxStatus, desconectarDropbox }) {
+function PainelDuplicados({ fretes, custos, onRemover }) {
+  const [grupos, setGrupos] = useState(null);
+  const [marcados, setMarcados] = useState({});
+  const [feito, setFeito] = useState("");
+
+  const procurar = () => {
+    const g = acharDuplicados(fretes, custos);
+    const m = {};
+    g.forEach((x, i) => { m[i] = x.sugerido; });
+    setGrupos(g); setMarcados(m); setFeito("");
+  };
+
+  const totalSobrando = (grupos || []).reduce((n, g, i) => n + (marcados[i] ? g.sair.length : 0), 0);
+  const valorSobrando = (grupos || []).reduce((v, g, i) => {
+    if (!marcados[i]) return v;
+    return v + g.sair.reduce((s, x) => s + (Number(g.especie === "frete" ? x.valorFrete : x.valor) || 0), 0);
+  }, 0);
+
+  const remover = () => {
+    const idsF = [], idsC = [];
+    (grupos || []).forEach((g, i) => {
+      if (!marcados[i]) return;
+      g.sair.forEach(x => (g.especie === "frete" ? idsF : idsC).push(x.id));
+    });
+    if (!idsF.length && !idsC.length) return;
+    const ok = window.confirm(
+      "Remover " + (idsF.length + idsC.length) + " lançamento(s) duplicado(s)?\n\n" +
+      "Fretes: " + idsF.length + "\nDespesas: " + idsC.length + "\n\n" +
+      "Em cada par fica o lançamento com histórico de pagamento. Isto não pode ser desfeito " +
+      "pelo app — exporte um backup antes se quiser garantia.");
+    if (!ok) return;
+    onRemover(idsF, idsC);
+    setFeito("Removidos " + (idsF.length + idsC.length) + " lançamento(s).");
+    setGrupos(null);
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--texto)", fontFamily: "'Oswald', sans-serif" }}>
+        Lançamentos duplicados
+      </span>
+      <span className="text-[11px] -mt-1" style={{ color: "var(--suave)" }}>
+        Procura o mesmo frete lançado duas vezes (mesmo container) e a mesma despesa
+        repetida (mesmo tipo, data, valor e fornecedor). Em cada par fica o que tem
+        histórico de pagamento.
+      </span>
+
+      <button onClick={procurar}
+        className="py-2 rounded-md text-xs font-semibold uppercase tracking-wide"
+        style={{ background: "var(--superficie)", border: "1px solid var(--borda)", color: "var(--texto)", fontFamily: "'Oswald', sans-serif" }}>
+        Procurar duplicados
+      </button>
+
+      {feito && <div className="text-xs" style={{ color: "var(--ok)" }}>{feito}</div>}
+
+      {grupos && grupos.length === 0 && (
+        <div className="text-xs" style={{ color: "var(--ok)" }}>Nenhum duplicado encontrado.</div>
+      )}
+
+      {grupos && grupos.length > 0 && (
+        <>
+          {grupos.map((g, i) => (
+            <label key={g.especie + g.chave} className="flex items-start gap-2 p-2 rounded-md cursor-pointer"
+                   style={{ background: "var(--superficie)", border: "1px solid " + (marcados[i] ? "var(--perigo)" : "var(--borda)") }}>
+              <input type="checkbox" checked={!!marcados[i]}
+                     onChange={() => setMarcados({ ...marcados, [i]: !marcados[i] })} className="mt-0.5" />
+              <span className="text-[11px]" style={{ color: "var(--texto)" }}>
+                <b>{g.titulo}</b> · {g.detalhe}
+                <span style={{ color: "var(--suave)" }}>
+                  {" — " + (g.sair.length + 1) + " lançamentos, sai " + g.sair.length}
+                </span>
+                {g.aviso && <span style={{ display: "block", color: "var(--acento)" }}>{g.aviso}</span>}
+                <span style={{ display: "block", color: "var(--suave)" }}>
+                  fica: {(g.ficar.cteNumero ? "CTe " + g.ficar.cteNumero : g.ficar.id.slice(0, 8))}
+                  {(g.ficar.comissaoPagamentos || g.ficar.pagamentos || []).length > 0 ? " (com pagamento)" : ""}
+                </span>
+              </span>
+            </label>
+          ))}
+          <button onClick={remover} disabled={totalSobrando === 0}
+            className="py-2.5 rounded-md text-xs font-semibold uppercase tracking-wide text-white disabled:opacity-40"
+            style={{ background: "var(--perigo)", fontFamily: "'Oswald', sans-serif" }}>
+            Remover {totalSobrando} duplicado(s) — {currency(valorSobrando)}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
+function SettingsModal({ onClose, fretes, custos, onImport, onRemoverDuplicados, onLiberarEspaco, pastaHandle, pastaNome, pastaPrecisaReconectar, pastaStatus, conectarPasta, reconectarPasta, desconectarPasta, dropboxConectado, dropboxStatus, desconectarDropbox }) {
   const [dropboxAppKey, setDropboxAppKey] = useState(() => localStorage.getItem(LS_DROPBOX.appKey) || DROPBOX_APP_KEY_PADRAO);
   const { config, atualizarConfig } = useConfig();
   const [apiKey, setApiKey] = useState(localStorage.getItem(LS_KEYS.apiKey) || "");
@@ -1153,6 +1313,8 @@ function SettingsModal({ onClose, fretes, custos, onImport, onLiberarEspaco, pas
           <button onClick={onClose} className="text-white/70 hover:text-white"><IconX size={18} /></button>
         </div>
         <div className="p-4 overflow-y-auto flex flex-col gap-4">
+          <PainelDuplicados fretes={fretes} custos={custos} onRemover={onRemoverDuplicados} />
+
           <div className="flex flex-col gap-2">
             <span className="text-xs font-semibold uppercase tracking-wide" style={{ color: "var(--texto)", fontFamily: "'Oswald', sans-serif" }}>
               Dados da empresa
@@ -5360,6 +5522,10 @@ function ControleFretes() {
           fretes={fretes}
           custos={custos}
           onImport={(f, c) => { persistFretes(f); persistCustos(c); setShowSettings(false); }}
+          onRemoverDuplicados={(idsF, idsC) => {
+            if (idsF && idsF.length) persistFretes(fretes.filter(f => idsF.indexOf(f.id) < 0));
+            if (idsC && idsC.length) persistCustos(custos.filter(c => idsC.indexOf(c.id) < 0));
+          }}
           onLiberarEspaco={liberarEspacoAntigo}
           pastaHandle={pastaHandle}
           pastaNome={pastaNome}
