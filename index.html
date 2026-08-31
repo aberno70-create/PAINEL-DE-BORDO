@@ -47,7 +47,9 @@
   </div>
 <script>
 (function () {
-  var destino = "app.html?t=" + Date.now();
+  // repassa o que veio no endereco (ex.: o ?code=... da volta do Dropbox)
+  var extra = location.search ? "&" + location.search.replace(/^\?/, "") : "";
+  var destino = "app.html?t=" + Date.now() + extra + location.hash;
   try { location.replace(destino); }
   catch (e) { location.href = destino; }
   // se em 6 segundos nada aconteceu, oferece o link na mao
