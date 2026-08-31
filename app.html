@@ -71,6 +71,10 @@
     .rolagem-resp { overflow-x: visible !important; }
     .grade-dre { grid-template-columns: 1fr !important; }
   }
+  .grade-totais { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 1px; }
+  @media (min-width: 640px) { .grade-totais { grid-template-columns: repeat(4, minmax(0,1fr)); }
+
+  }
   /* ---------------------------------------------------------------
      IMPRESSAO — o app e escuro, o papel e branco. Aqui a paleta
      inteira e trocada por tinta: cinza legivel, linhas visiveis e
@@ -158,7 +162,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v48";
+const APP_VERSION = "v49";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -866,6 +870,110 @@ function EmptyState({ text }) {
   return (
     <div className="py-10 flex flex-col items-center gap-2 rounded-md border border-dashed" style={{ borderColor: "var(--borda)", color: "var(--suave)" }}>
       <IconFile size={22} /><span className="text-sm text-center px-4">{text}</span>
+    </div>
+  );
+}
+
+// Tira de totais que acompanha o filtro da aba Fretes. Cada bloco e um numero so,
+// pequeno, para caber no celular sem estourar a largura.
+function TotaisFiltro({ t }) {
+  const blocos = [
+    { rot: "Tíquetes", val: String(t.qtd), cor: "var(--texto)" },
+    { rot: "Frete bruto", val: currency(t.bruto), cor: "var(--texto)" },
+    { rot: "Recebido", val: currency(t.recebido), cor: "var(--ok)" },
+    { rot: "A receber", val: currency(t.aReceber), cor: t.aReceber > 0 ? "var(--perigo)" : "var(--ok)" },
+    { rot: "Comissão paga", val: currency(t.comissaoPaga), cor: t.comissaoPaga > 0 ? "var(--acento)" : "var(--suave)" },
+    { rot: "Comissão a pagar", val: currency(t.comissaoAPagar), cor: t.comissaoAPagar > 0 ? "var(--perigo)" : "var(--ok)" },
+    { rot: "Despesas pagas", val: currency(t.despesasPagas), cor: t.despesasPagas > 0 ? "var(--acento)" : "var(--suave)" },
+    { rot: "Saldo", val: currency(t.resultado), cor: t.resultado >= 0 ? "var(--ok)" : "var(--perigo)" }
+  ];
+  return (
+    <div className="rounded-md overflow-hidden" style={{ background: "var(--superficie)", border: "1px solid var(--borda)" }}>
+      <div className="px-3 py-2 text-[11px] font-semibold uppercase tracking-wider"
+           style={{ background: "var(--linha)", color: "var(--suave)", fontFamily: "'Oswald', sans-serif" }}>
+        Total do que está filtrado
+      </div>
+      <div className="grade-totais" style={{ background: "var(--borda)" }}>
+        {blocos.map(b => (
+          <div key={b.rot} className="px-3 py-2.5" style={{ background: "var(--superficie)" }}>
+            <div className="text-[10px] uppercase tracking-wider mb-0.5" style={{ color: "var(--suave)" }}>{b.rot}</div>
+            <div className="text-sm font-bold break-words" style={{ fontFamily: "'JetBrains Mono', monospace", color: b.cor }}>{b.val}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// Quadro de containers para clicar em vez de digitar. Da para marcar varios.
+function ContainerPicker({ lista, selecionados, onAplicar, onFechar }) {
+  const [sel, setSel] = useState(selecionados);
+  const [busca, setBusca] = useState("");
+  const alterna = (k) => setSel(s => s.indexOf(k) >= 0 ? s.filter(x => x !== k) : s.concat([k]));
+  const visiveis = lista.filter(c => !busca || c.chave.toLowerCase().includes(busca.toLowerCase()));
+  const somaSel = lista.filter(c => sel.indexOf(c.chave) >= 0).reduce((s, c) => s + c.valor, 0);
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(28,30,34,0.7)" }}>
+      <div className="w-full max-w-md rounded-lg overflow-hidden flex flex-col max-h-[88vh]" style={{ background: "var(--fundo)", border: "1px solid var(--borda)" }}>
+        <div className="flex items-center justify-between px-4 py-3" style={{ background: "var(--barra)" }}>
+          <span className="text-sm font-semibold uppercase tracking-wider" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--na-barra)" }}>
+            Escolher containers
+          </span>
+          <button onClick={onFechar} style={{ color: "var(--na-barra)" }}><IconX size={18} /></button>
+        </div>
+        <div className="px-4 pt-3">
+          <input type="text" value={busca} onChange={(e) => setBusca(e.target.value)} placeholder="Procurar na lista (opcional)"
+                 className="w-full px-3 py-2 rounded-md text-sm"
+                 style={{ background: "var(--superficie)", border: "1px solid var(--borda)", color: "var(--texto)" }} />
+        </div>
+        <div className="p-4 pt-3 overflow-y-auto flex flex-col gap-1.5">
+          {visiveis.length === 0 && <div className="text-sm py-6 text-center" style={{ color: "var(--suave)" }}>Nenhum container nesse período.</div>}
+          {visiveis.map(c => {
+            const marcado = sel.indexOf(c.chave) >= 0;
+            return (
+              <button key={c.chave} onClick={() => alterna(c.chave)}
+                      className="w-full flex items-center gap-2.5 px-3 py-2.5 rounded-md text-left"
+                      style={{
+                        background: marcado ? "var(--aba-ativa-bg)" : "var(--superficie)",
+                        border: "1px solid " + (marcado ? "var(--acento)" : "var(--borda)")
+                      }}>
+                <span className="w-4 h-4 rounded-sm shrink-0 flex items-center justify-center"
+                      style={{ border: "1px solid " + (marcado ? "var(--acento)" : "var(--borda)"), background: marcado ? "var(--acento)" : "transparent" }}>
+                  {marcado && <IconCheck size={11} style={{ color: "var(--sobre-acento)" }} />}
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm font-semibold truncate" style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--texto)" }}>{c.chave}</span>
+                  <span className="block text-[11px]" style={{ color: "var(--suave)" }}>
+                    {c.qtd} tíquete{c.qtd > 1 ? "s" : ""}{c.ultima ? " · " + new Date(c.ultima + "T00:00:00").toLocaleDateString("pt-BR") : ""}
+                  </span>
+                </span>
+                <span className="text-sm font-bold shrink-0" style={{ fontFamily: "'JetBrains Mono', monospace", color: c.aReceber > 0 ? "var(--perigo)" : "var(--ok)" }}>
+                  {currency(c.valor)}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="px-4 py-3 flex flex-col gap-2" style={{ background: "var(--superficie)", borderTop: "1px solid var(--borda)" }}>
+          <div className="flex items-center gap-2">
+          <button onClick={() => setSel([])} className="px-3 py-2 rounded-md text-xs font-semibold uppercase tracking-wide"
+                  style={{ background: "var(--fundo)", border: "1px solid var(--borda)", color: "var(--texto)", fontFamily: "'Oswald', sans-serif" }}>
+            Limpar
+          </button>
+          <button onClick={() => setSel(visiveis.map(c => c.chave))} className="px-3 py-2 rounded-md text-xs font-semibold uppercase tracking-wide"
+                  style={{ background: "var(--fundo)", border: "1px solid var(--borda)", color: "var(--texto)", fontFamily: "'Oswald', sans-serif" }}>
+            Marcar todos
+          </button>
+          <span className="text-[11px] ml-auto text-right" style={{ color: "var(--suave)" }}>
+            {sel.length === 0 ? "sem filtro" : sel.length + " marcado(s) · " + currency(somaSel)}
+          </span>
+          </div>
+          <button onClick={() => { onAplicar(sel); onFechar(); }} className="w-full px-4 py-2.5 rounded-md text-sm font-semibold uppercase tracking-wide"
+                  style={{ background: "var(--acento)", color: "var(--sobre-acento)", fontFamily: "'Oswald', sans-serif" }}>
+            Aplicar
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -4557,7 +4665,8 @@ function ControleFretes() {
   const [motoristaDataFim, setMotoristaDataFim] = useState("");
   const [motoristaVisualizacao, setMotoristaVisualizacao] = useState("ambos"); // ambos | tickets | extrato
 
-  const [freteFiltroContainer, setFreteFiltroContainer] = useState("");
+  const [freteContainersSel, setFreteContainersSel] = useState([]);
+  const [showContainerPicker, setShowContainerPicker] = useState(false);
   const [freteFiltroCliente, setFreteFiltroCliente] = useState("");
   const [freteFiltroStatus, setFreteFiltroStatus] = useState("todos");
   const [fretePeriodo, setFretePeriodo] = useState("todos");
@@ -4624,12 +4733,53 @@ function ControleFretes() {
 
   const nomesFornecedores = Array.from(new Set(custos.filter(c => c.pagoPor === "empresa").map(c => c.tipo === "combustivel" ? c.posto : c.fornecedor).filter(Boolean)));
 
-  const fretesFiltrados = fretes.filter(f =>
+  // Chave unica de container, sempre igual em todo lugar (evita "MSKU 123" x "msku123").
+  const chaveContainer = (f) => ((f.numeroContainer || "").trim().toUpperCase() || "TBN");
+
+  // Os fretes ja passados por periodo + cliente + situacao, mas AINDA sem o filtro de
+  // container: e desta lista que sai o quadro de containers para clicar (com a quantidade
+  // e o valor de cada um ja batendo com os demais filtros escolhidos).
+  const fretesAntesDoContainer = fretes.filter(f =>
     dentroDoPeriodoSel(f.dataTiquete, fretePeriodo, freteDataInicio, freteDataFim) &&
-    (!freteFiltroContainer || (f.numeroContainer || "").toLowerCase().includes(freteFiltroContainer.toLowerCase())) &&
     (!freteFiltroCliente || (f.cliente || "").toLowerCase().includes(freteFiltroCliente.toLowerCase())) &&
     (freteFiltroStatus === "todos" || (freteFiltroStatus === "recebido" ? f.status === "pago" : f.status !== "pago"))
   );
+  const listaContainers = (() => {
+    const m = {};
+    fretesAntesDoContainer.forEach(f => {
+      const k = chaveContainer(f);
+      if (!m[k]) m[k] = { chave: k, qtd: 0, valor: 0, aReceber: 0, ultima: "" };
+      m[k].qtd += 1;
+      m[k].valor += f.valorFrete || 0;
+      if (f.status !== "pago") m[k].aReceber += f.valorFrete || 0;
+      if ((f.dataTiquete || "") > m[k].ultima) m[k].ultima = f.dataTiquete || "";
+    });
+    return Object.values(m).sort((a, b) => a.chave.localeCompare(b.chave));
+  })();
+  const fretesFiltrados = fretesAntesDoContainer.filter(f =>
+    freteContainersSel.length === 0 || freteContainersSel.indexOf(chaveContainer(f)) >= 0
+  );
+
+  // Totalizador do que esta na tela: acompanha TODOS os filtros ao mesmo tempo
+  // (periodo/data personalizada, cliente, container e a situacao Todos/A receber/Recebidos).
+  const totaisDosFretesFiltrados = (() => {
+    let bruto = 0, recebido = 0, aReceber = 0, comissaoTotal = 0, comissaoPaga = 0,
+        comissaoAPagar = 0, despesasPagas = 0, despesasPend = 0, resultado = 0;
+    fretesFiltrados.forEach(f => {
+      const d = dreDaViagem(f);
+      bruto += f.valorFrete || 0;
+      recebido += d.receitaRecebida;
+      aReceber += d.receitaAReceber;
+      comissaoTotal += f.comissaoMotorista || 0;
+      comissaoPaga += d.comissaoPaga;
+      comissaoAPagar += d.comissaoPendente;
+      despesasPagas += d.combustivelPago + d.pedagioPago + d.manutencaoPago;
+      despesasPend += d.combustivelPendente + d.pedagioPendente + d.manutencaoPendente;
+      resultado += d.resultado;
+    });
+    return { qtd: fretesFiltrados.length, bruto, recebido, aReceber, comissaoTotal,
+             comissaoPaga, comissaoAPagar, despesasPagas, despesasPend, resultado };
+  })();
   const custosFiltrados = custos.filter(c =>
     dentroDoPeriodoSel(c.data, custosPeriodo, custosDataInicio, custosDataFim) &&
     (custosFornecedorFiltro === "todos" || (c.tipo === "combustivel" ? c.posto : c.fornecedor) === custosFornecedorFiltro) &&
@@ -5150,8 +5300,29 @@ function ControleFretes() {
             </button>
             <SeletorPeriodo periodoSel={fretePeriodo} onPeriodo={setFretePeriodo} ini={freteDataInicio} onIni={setFreteDataInicio} fim={freteDataFim} onFim={setFreteDataFim} />
             <div className="flex flex-wrap items-center gap-2 no-print">
-              <input type="text" value={freteFiltroContainer} onChange={(e) => setFreteFiltroContainer(e.target.value)} placeholder="Filtrar por container" className="px-3 py-1.5 rounded-md text-xs" style={inputStyle} />
-              <input type="text" value={freteFiltroCliente} onChange={(e) => setFreteFiltroCliente(e.target.value)} placeholder="Filtrar por cliente" className="px-3 py-1.5 rounded-md text-xs" style={inputStyle} />
+              <button onClick={() => setShowContainerPicker(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold"
+                      style={{
+                        background: freteContainersSel.length ? "var(--aba-ativa-bg)" : "var(--superficie)",
+                        border: "1px solid " + (freteContainersSel.length ? "var(--acento)" : "var(--borda)"),
+                        color: freteContainersSel.length ? "var(--aba-ativa-txt)" : "var(--texto)"
+                      }}>
+                <IconContainer size={13} />
+                {freteContainersSel.length === 0
+                  ? "Filtrar por container"
+                  : (freteContainersSel.length === 1 ? freteContainersSel[0] : freteContainersSel.length + " containers")}
+              </button>
+              {freteContainersSel.length > 0 && (
+                <button onClick={() => setFreteContainersSel([])} title="Tirar o filtro de container"
+                        className="px-2 py-1.5 rounded-md text-xs"
+                        style={{ background: "var(--superficie)", border: "1px solid var(--borda)", color: "var(--perigo)" }}>
+                  <IconX size={13} />
+                </button>
+              )}
+              <input type="text" value={freteFiltroCliente} onChange={(e) => setFreteFiltroCliente(e.target.value)} placeholder="Filtrar por cliente" className="px-3 py-1.5 rounded-md text-xs" style={inputStyle} list="lista-clientes-fretes" />
+              <datalist id="lista-clientes-fretes">
+                {Array.from(new Set(fretes.map(f => f.cliente).filter(Boolean))).sort().map(n => <option key={n} value={n} />)}
+              </datalist>
               {[
                 { id: "todos", label: "Todos" },
                 { id: "a_receber", label: "A receber" },
@@ -5163,6 +5334,11 @@ function ControleFretes() {
                 </button>
               ))}
             </div>
+            {showContainerPicker && (
+              <ContainerPicker lista={listaContainers} selecionados={freteContainersSel}
+                               onAplicar={setFreteContainersSel} onFechar={() => setShowContainerPicker(false)} />
+            )}
+            {fretesFiltrados.length > 0 && <TotaisFiltro t={totaisDosFretesFiltrados} />}
             {(() => {
               return fretesFiltrados.length === 0 ? <EmptyState text="Nenhum tíquete encontrado para esse filtro." /> : (
                 <div className="flex flex-col gap-2 mt-2">
