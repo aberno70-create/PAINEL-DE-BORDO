@@ -158,7 +158,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v45";
+const APP_VERSION = "v46";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -914,6 +914,23 @@ const freteRecebidoAteData = (f, limite) => {
 // de pagamento parcial, comprovante e soma acumulada usado nos tickets de despesa/ressarcimento.
 // Esta função só monta a representação — quem persiste os pagamentos é frete.comissaoPagamentos.
 const COMISSAO_PREFIXO_ID = "comissao-";
+
+// Como um lancamento da conta do motorista deve aparecer na tela de rateio.
+// A comissao vinha rotulada como "Manutencao", porque o codigo so testava
+// combustivel e pedagio e caia no rotulo generico. Alem de errado, escondia
+// justamente o que o Alexandre precisa ver: de qual frete e a comissao.
+function rotuloDoItem(c) {
+  if (!c) return "";
+  if (c.tipo === "comissao") {
+    const cont = c.numeroContainer || (c.freteRef && c.freteRef.numeroContainer) || "";
+    return "Comissão" + (cont ? " · " + cont : "");
+  }
+  const base = c.tipo === "combustivel" ? "Combustível"
+             : c.tipo === "pedagio" ? "Pedágio"
+             : (c.itemPrincipal || "Manutenção");
+  const quem = c.fornecedor || c.posto || "";
+  return base + (quem ? " · " + quem : "");
+}
 const comissaoComoItem = (f) => ({
   id: COMISSAO_PREFIXO_ID + f.id,
   tipo: "comissao",
@@ -2165,7 +2182,7 @@ function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm, pr
     const pendente = saldoPendenteCusto(c);
     const aloc = Math.min(pendente, Math.max(restante, 0));
     restante -= aloc;
-    return { custoId: c.id, valorAlocado: Math.round(aloc * 100) / 100, parcial: aloc > 0 && aloc < pendente - 0.004, descricao: c.tipo === "combustivel" ? "Combustível" : c.tipo === "pedagio" ? "Pedágio" : (c.itemPrincipal || "Manutenção"), data: c.data };
+    return { custoId: c.id, valorAlocado: Math.round(aloc * 100) / 100, parcial: aloc > 0 && aloc < pendente - 0.004, descricao: rotuloDoItem(c), data: c.data };
   }).filter(a => a.valorAlocado > 0);
   const sobra = Math.round(Math.max(restante, 0) * 100) / 100;
 
@@ -2240,7 +2257,7 @@ function PagamentoCustoModal({ custo, custosRelacionados, onClose, onConfirm, pr
                     <label key={c.id} className="flex items-center gap-2 text-xs px-2 py-1.5 rounded" style={{ background: "var(--superficie)", border: "1px solid var(--borda)" }}>
                       <input type="checkbox" checked={selecionados.includes(c.id)} onChange={() => toggleSelecionado(c.id)} />
                       <span style={{ color: "var(--texto)" }}>{c.data ? new Date(c.data + "T00:00:00").toLocaleDateString("pt-BR") : "sem data"}</span>
-                      <span style={{ color: "var(--suave)" }}>{c.tipo === "combustivel" ? "Combustível" : c.tipo === "pedagio" ? "Pedágio" : (c.itemPrincipal || "Manutenção")}</span>
+                      <span style={{ color: "var(--suave)" }}>{rotuloDoItem(c)}</span>
                       <span className="ml-auto font-semibold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--perigo)" }}>{currency(saldoPendenteCusto(c))}</span>
                     </label>
                   ))}
