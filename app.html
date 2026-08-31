@@ -158,7 +158,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v46";
+const APP_VERSION = "v47";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -368,12 +368,23 @@ function dropboxEstaConectado() {
 function dropboxDesconectar() {
   Object.values(LS_DROPBOX).forEach((k) => localStorage.removeItem(k));
 }
+// O cabecalho Dropbox-API-Arg viaja como cabecalho HTTP, e cabecalho HTTP
+// so aceita ASCII. Um arquivo chamado "...comissoes R$ 900,00.jpeg" - com o
+// "o" com til - quebrava a requisicao inteira, e o documento aparecia na
+// caixa de entrada sem miniatura e sem leitura. A propria Dropbox manda
+// escapar tudo que passa de 0x7F em \uXXXX.
+function dropboxArg(obj) {
+  return JSON.stringify(obj).replace(/[\u007f-\uffff]/g, function (ch) {
+    return "\\u" + ("000" + ch.charCodeAt(0).toString(16)).slice(-4);
+  });
+}
+
 async function dropboxLerDados() {
   const token = await dropboxTokenValido();
   if (!token) throw new Error("SEM_TOKEN");
   const resp = await fetch("https://content.dropboxapi.com/2/files/download", {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Dropbox-API-Arg": JSON.stringify({ path: NOME_ARQUIVO_DROPBOX }) }
+    headers: { Authorization: `Bearer ${token}`, "Dropbox-API-Arg": dropboxArg({ path: NOME_ARQUIVO_DROPBOX }) }
   });
   if (resp.status === 409) return null; // arquivo ainda não existe — normal na primeira conexão
   if (!resp.ok) throw new Error("FALHA_LEITURA");
@@ -387,7 +398,7 @@ async function dropboxEscreverDados(dados) {
     method: "POST",
     headers: {
       Authorization: `Bearer ${token}`,
-      "Dropbox-API-Arg": JSON.stringify({ path: NOME_ARQUIVO_DROPBOX, mode: "overwrite", mute: true }),
+      "Dropbox-API-Arg": dropboxArg({ path: NOME_ARQUIVO_DROPBOX, mode: "overwrite", mute: true }),
       "Content-Type": "application/octet-stream"
     },
     body: JSON.stringify(dados)
@@ -446,7 +457,7 @@ async function dropboxBaixarArquivo(caminho) {
   if (!token) throw new Error("SEM_TOKEN");
   const resp = await fetch("https://content.dropboxapi.com/2/files/download", {
     method: "POST",
-    headers: { Authorization: `Bearer ${token}`, "Dropbox-API-Arg": JSON.stringify({ path: caminho }) }
+    headers: { Authorization: `Bearer ${token}`, "Dropbox-API-Arg": dropboxArg({ path: caminho }) }
   });
   if (!resp.ok) throw new Error("FALHA_DOWNLOAD");
   return resp.blob();
@@ -3260,7 +3271,7 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
   );
 }
 
-function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, onPagamento, onAbrirImagem, config }) {
+function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido, onPagamento, onAbrirImagem, dadosProntos, config }) {
   const [estado, setEstado] = useState("parado");   // parado | buscando | pronto | erro
   const [erro, setErro] = useState("");
   const [itens, setItens] = useState([]);
@@ -3276,15 +3287,29 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
     try { localStorage.setItem("gvgs_docs_processados", JSON.stringify(novo)); } catch (e) {}
   };
 
+  const diasEntre = (a, b) => {
+    if (!a || !b) return 9999;
+    const d1 = new Date(a + "T00:00:00"), d2 = new Date(b + "T00:00:00");
+    return Math.abs((d1 - d2) / 86400000);
+  };
+
   const jaExisteNoApp = (it) => {
     const v = Number(it.valor) || 0;
     if (!v || !it.data) return "";
     if (it.categoria === "frete") {
+      // Um container é levado uma vez. Se o número bate, é duplicata até
+      // prova em contrário — mesmo que a IA tenha lido um CTe diferente na
+      // segunda foto do mesmo tíquete, que foi o que aconteceu em 07/2026.
       const c = padronizarContainerApp(it.container);
-      const achou = fretes.find(f =>
-        (c && padronizarContainerApp(f.numeroContainer) === c && Math.abs((Number(f.valorFrete) || 0) - v) < 0.01) ||
-        (f.dataTiquete === it.data && Math.abs((Number(f.valorFrete) || 0) - v) < 0.01));
-      if (achou) return `já existe o frete ${achou.numeroContainer || "TBN"} de ${currency(achou.valorFrete)}`;
+      const achou = fretes.find(f => {
+        const fc = padronizarContainerApp(f.numeroContainer);
+        const mesmoValor = Math.abs((Number(f.valorFrete) || 0) - v) < 0.01;
+        if (c && fc === c) {
+          return mesmoValor || f.dataTiquete === it.data || diasEntre(f.dataTiquete, it.data) <= 20;
+        }
+        return f.dataTiquete === it.data && mesmoValor;
+      });
+      if (achou) return `já existe o frete ${achou.numeroContainer || "TBN"} de ${currency(achou.valorFrete)} em ${achou.dataTiquete || "sem data"}`;
     }
     if (it.categoria === "despesa") {
       const achou = custos.find(c => c.data === it.data && Math.abs((Number(c.valor) || 0) - v) < 0.01
@@ -3295,6 +3320,16 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
   };
 
   const buscar = async (recomecarDoZero) => {
+    // TRAVA: sem os lançamentos carregados, a checagem de duplicidade compara
+    // contra uma lista vazia e TUDO parece inédito. Foi assim que cinco fretes
+    // entraram em duplicidade em 31/08/2026.
+    if (!dadosProntos) {
+      setErro("Espere os lançamentos terminarem de carregar do Dropbox. "
+            + "Sem eles, não dá para saber o que já foi lançado — e o mesmo "
+            + "documento entraria duas vezes.");
+      setEstado("pronto");
+      return;
+    }
     setEstado("buscando"); setErro(""); setItens([]);
     if (recomecarDoZero) cacheIaLimpar();
     const cacheIa = cacheIaLer();
@@ -3390,6 +3425,24 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
   const lancar = async (i) => {
     const it = itens[i];
     if (!it || !it.valor || !it.data) return;
+
+    // Segunda checagem, agora contra o que está lançado NESTE momento.
+    // A primeira roda quando a lista é montada; se dois documentos do mesmo
+    // tíquete estiverem na mesma leva, o segundo só é pego aqui.
+    const conflito = jaExisteNoApp(it);
+    if (conflito) {
+      const seguir = window.confirm(
+        "ATENÇÃO — isto parece já estar lançado:\n\n" + conflito +
+        "\n\nArquivo: " + it.nome +
+        "\n\nOK = lançar assim mesmo (vai ficar em duplicidade)\nCancelar = não lançar");
+      if (!seguir) {
+        const parados = [...itens];
+        parados[i] = { ...it, estado: "duplicado", aviso: conflito, incluir: false };
+        setItens(parados);
+        return;
+      }
+    }
+
     const novos = [...itens];
     novos[i] = { ...it, estado: "lancando" };
     setItens(novos);
@@ -3482,10 +3535,10 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
               <b> Apps/painel-de-bordo-gvgs-alexandre</b> no Dropbox.
             </div>
           </div>
-          <button onClick={() => buscar(false)} disabled={estado === "buscando"}
+          <button onClick={() => buscar(false)} disabled={estado === "buscando" || !dadosProntos}
             className="px-4 py-2 rounded-md text-xs font-semibold uppercase tracking-wide text-white disabled:opacity-50"
             style={{ background: "var(--ok)", fontFamily: "'Oswald', sans-serif" }}>
-            {estado === "buscando" ? "Lendo..." : "Buscar documentos"}
+            {!dadosProntos ? "Carregando lançamentos..." : estado === "buscando" ? "Lendo..." : "Buscar documentos"}
           </button>
         </div>
         {erro && (
@@ -5058,6 +5111,7 @@ function ControleFretes() {
               persistFretes(fretes.map(f => f.id === id ? { ...f, status: "pago", dataPagamento: data } : f))}
             onPagamento={abrirPagamentoDaEntrada}
             onAbrirImagem={setImagemAmpliada}
+            dadosProntos={!dropboxEstaConectado() || dropboxCarregado}
           />
         ) : tab === "motorista" ? (
           <div className="flex flex-col gap-4">
