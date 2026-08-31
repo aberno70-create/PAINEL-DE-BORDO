@@ -158,7 +158,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v41";
+const APP_VERSION = "v42";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -2943,7 +2943,21 @@ function AvisoVersaoNova() {
       .then(txt => {
         if (!txt) return;
         const m = txt.match(/APP_VERSION = "(v\d+)"/);
-        if (m && m[1] !== APP_VERSION) setNova(m[1]);
+        if (!m || m[1] === APP_VERSION) return;
+        setNova(m[1]);
+        // Atualiza sozinho, uma vez por sessao. Sem isso, um atalho salvo
+        // com endereco fixo continua servindo a copia velha do cache do
+        // navegador e o app "nao atualiza" - foi o que aconteceu com o
+        // atalho da area de trabalho e com o icone da tela de inicio.
+        // O carimbo de tempo no endereco garante copia nova; a trava no
+        // sessionStorage impede qualquer chance de ficar recarregando.
+        try {
+          if (!sessionStorage.getItem("gvgs_autoatualizou")) {
+            sessionStorage.setItem("gvgs_autoatualizou", m[1]);
+            location.replace(alvo + "?v=" + m[1] + "." + Date.now());
+            return;
+          }
+        } catch (e) { /* sem sessionStorage: fica so o aviso com o botao */ }
       })
       .catch(() => {});
   }, []);
@@ -2954,7 +2968,7 @@ function AvisoVersaoNova() {
                   fontSize: 13, fontFamily: "'Inter', sans-serif" }}>
       <span>Existe uma versão mais nova publicada ({nova}). Você está na {APP_VERSION}.</span>
       <button
-        onClick={() => { location.replace(location.origin + location.pathname + "?v=" + nova); }}
+        onClick={() => { location.replace(location.origin + location.pathname + "?v=" + nova + "." + Date.now()); }}
         style={{ background: "var(--barra)", color: "var(--superficie)", border: 0, borderRadius: 6,
                  padding: "5px 12px", fontWeight: 700, cursor: "pointer" }}>
         Atualizar agora
