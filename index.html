@@ -158,7 +158,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v40";
+const APP_VERSION = "v41";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -537,6 +537,64 @@ async function prepararImagemParaIA(dataUrl, nome) {
   const ext = (String(nome || "").match(/\.([A-Za-z0-9]+)$/) || [, ""])[1].toLowerCase();
   if (ext === "heic" || ext === "heif") throw new Error("FORMATO_HEIC");
   throw new Error("FORMATO_NAO_SUPORTADO");
+}
+
+/* ===========================================================
+   CACHE DE LEITURA POR IA (no navegador)
+   Ler um documento com a IA custa tempo e dinheiro. O resultado
+   fica guardado pela impressao digital (SHA-256) do arquivo: se o
+   mesmo documento aparecer de novo numa busca seguinte - porque
+   ainda nao foi lancado, ou porque so foi renomeado - a resposta
+   sai daqui e nao ha nova chamada a API.
+   So leitura bem-sucedida entra no cache; erro nao entra, para
+   poder ser tentado de novo.
+=========================================================== */
+const LS_CACHE_IA = "gvgs_cache_leitura_ia";
+const CACHE_IA_MAX = 400;
+
+function cacheIaLer() {
+  try { return JSON.parse(localStorage.getItem(LS_CACHE_IA) || "{}"); }
+  catch (e) { return {}; }
+}
+
+function cacheIaGravar(cache) {
+  const tentar = (obj) => {
+    localStorage.setItem(LS_CACHE_IA, JSON.stringify(obj));
+    return true;
+  };
+  try { return tentar(cache); }
+  catch (e) {
+    // sem espaco no navegador: fica so com os mais recentes e tenta de novo
+    try {
+      const recentes = Object.entries(cache)
+        .sort((x, y) => (y[1].em || 0) - (x[1].em || 0))
+        .slice(0, Math.floor(CACHE_IA_MAX / 2));
+      const menor = {};
+      recentes.forEach(([k, v]) => { menor[k] = v; });
+      return tentar(menor);
+    } catch (e2) { return false; }
+  }
+}
+
+function cacheIaGuardar(hash, resultado) {
+  if (!hash || !resultado) return;
+  const cache = cacheIaLer();
+  cache[hash] = { r: resultado, em: Date.now() };
+  const chaves = Object.keys(cache);
+  if (chaves.length > CACHE_IA_MAX) {
+    const recentes = Object.entries(cache)
+      .sort((x, y) => (y[1].em || 0) - (x[1].em || 0))
+      .slice(0, CACHE_IA_MAX);
+    const menor = {};
+    recentes.forEach(([k, v]) => { menor[k] = v; });
+    cacheIaGravar(menor);
+    return;
+  }
+  cacheIaGravar(cache);
+}
+
+function cacheIaLimpar() {
+  try { localStorage.removeItem(LS_CACHE_IA); return true; } catch (e) { return false; }
 }
 
 async function classificarDocumento(dataUrl, nome) {
@@ -3080,6 +3138,7 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
   const [estado, setEstado] = useState("parado");   // parado | buscando | pronto | erro
   const [erro, setErro] = useState("");
   const [itens, setItens] = useState([]);
+  const [lidosDoCache, setLidosDoCache] = useState(0);
   const [processados, setProcessados] = useState(() => {
     try { return JSON.parse(localStorage.getItem("gvgs_docs_processados") || "{}"); }
     catch (e) { return {}; }
@@ -3109,8 +3168,11 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
     return "";
   };
 
-  const buscar = async () => {
+  const buscar = async (recomecarDoZero) => {
     setEstado("buscando"); setErro(""); setItens([]);
+    if (recomecarDoZero) cacheIaLimpar();
+    const cacheIa = cacheIaLer();
+    setLidosDoCache(0);
     try {
       if (!dropboxEstaConectado()) throw new Error("SEM_DROPBOX");
       await dropboxGarantirPastas();
@@ -3135,7 +3197,18 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
           const dataUrl = await blobParaDataUrl(blob);
           linha.thumb = a.name.toLowerCase().endsWith(".pdf") ? null : await resizeImage(dataUrl);
           linha.ehPdf = a.name.toLowerCase().endsWith(".pdf");
-          const r = await classificarDocumento(dataUrl, a.name);
+          // ja lido antes? entao nao paga de novo
+          const guardado = hash ? cacheIa[hash] : null;
+          let r;
+          if (guardado && guardado.r) {
+            r = guardado.r;
+            linha.doCache = true;
+            setLidosDoCache(n => n + 1);
+          } else {
+            r = await classificarDocumento(dataUrl, a.name);
+            cacheIaGuardar(hash, r);
+            cacheIa[hash] = { r, em: Date.now() };
+          }
           linha.categoria = r.categoria || "despesa";
           if (r.tipoDocumento === "comprovante_bancario" && linha.categoria === "despesa") {
             linha.categoria = "pagamento";
@@ -3281,7 +3354,7 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
               <b> Apps/painel-de-bordo-gvgs-alexandre</b> no Dropbox.
             </div>
           </div>
-          <button onClick={buscar} disabled={estado === "buscando"}
+          <button onClick={() => buscar(false)} disabled={estado === "buscando"}
             className="px-4 py-2 rounded-md text-xs font-semibold uppercase tracking-wide text-white disabled:opacity-50"
             style={{ background: "var(--ok)", fontFamily: "'Oswald', sans-serif" }}>
             {estado === "buscando" ? "Lendo..." : "Buscar documentos"}
@@ -3296,7 +3369,20 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
         {itens.length > 0 && (
           <div className="mt-2 text-xs" style={{ color: "var(--ok)" }}>
             {prontos} pronto(s) para lançar de {itens.length} encontrado(s)
+            {lidosDoCache > 0 && (
+              <span style={{ color: "var(--suave)" }}>
+                {" · " + lidosDoCache + " sairam do cache, sem custo de leitura"}
+              </span>
+            )}
           </div>
+        )}
+        {estado === "pronto" && itens.length > 0 && (
+          <button onClick={() => buscar(true)}
+            className="mt-1 text-[11px] underline"
+            style={{ color: "var(--suave)" }}
+            title="Apaga o que ficou guardado e manda tudo para a IA de novo">
+            Reler tudo do zero (paga a leitura de novo)
+          </button>
         )}
       </div>
 
@@ -3311,7 +3397,10 @@ function AbaEntrada({ fretes, custos, onNovoFrete, onNovoCusto, onMarcarRecebido
                       : <span className="text-[10px]" style={{ color: "var(--suave)" }}>{it.ehPdf ? "PDF" : "..."}</span>}
           </div>
           <div className="flex-1" style={{ minWidth: 0 }}>
-            <div className="text-[11px] truncate" style={{ color: "var(--suave)" }}>{it.nome}</div>
+            <div className="text-[11px] truncate" style={{ color: "var(--suave)" }}>
+              {it.nome}
+              {it.doCache && <span className="ml-1" style={{ color: "var(--ok)" }}>· já lido antes</span>}
+            </div>
             {it.estado === "lendo" && <div className="text-xs mt-1">lendo o documento...</div>}
             {it.estado === "lancado" && <div className="text-xs mt-1" style={{ color: "var(--ok)" }}>lançado ✓</div>}
             {(it.estado === "pronto" || it.estado === "duplicado" || it.estado === "pagamento") && (
