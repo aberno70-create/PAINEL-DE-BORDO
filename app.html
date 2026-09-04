@@ -163,7 +163,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v51";
+const APP_VERSION = "v52";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -177,7 +177,7 @@ const inputStyle = { background: "var(--superficie)", border: "1px solid var(--b
 /* ===========================================================
    ARMAZENAMENTO LOCAL (localStorage do navegador)
 =========================================================== */
-const LS_KEYS = { fretes: "gvgs_fretes", custos: "gvgs_custos", apiKey: "gvgs_api_key", senhaHash: "gvgs_senha_hash", config: "gvgs_config", creditos: "gvgs_creditos" };
+const LS_KEYS = { fretes: "gvgs_fretes", custos: "gvgs_custos", apiKey: "gvgs_api_key", senhaHash: "gvgs_senha_hash", config: "gvgs_config", creditos: "gvgs_creditos", pessoais: "gvgs_pessoais" };
 const SS_UNLOCKED = "gvgs_unlocked";
 
 async function sha256Hex(texto) {
@@ -1445,7 +1445,7 @@ function SettingsModal({ onClose, fretes, custos, onImport, onRemoverDuplicados,
     reader.onload = () => {
       try {
         const parsed = JSON.parse(reader.result);
-        onImport(parsed.fretes || [], parsed.custos || []);
+        onImport(parsed.fretes || [], parsed.custos || [], parsed.pessoais || null);
       } catch {
         alert("Não consegui ler esse arquivo de backup.");
       }
@@ -4332,6 +4332,11 @@ function ControleFretes() {
   const [fretes, setFretes] = useState(() => lsGet(LS_KEYS.fretes) || []);
   const [custos, setCustos] = useState(() => lsGet(LS_KEYS.custos) || []);
   const [creditos, setCreditos] = useState(() => lsGet(LS_KEYS.creditos) || []);
+  // Saidas pessoais que passam pela conta da empresa (mercado, farmacia, casa,
+  // financiamento do carro). Ficam FORA de tudo que e do caminhao — nao entram
+  // no DRE, na margem nem no custo por frete. Existem so para a conta fechar.
+  const [pessoais, setPessoais] = useState(() => lsGet(LS_KEYS.pessoais) || []);
+  const persistPessoais = (next) => { setPessoais(next); lsSet(LS_KEYS.pessoais, next); };
 
   // Pasta de armazenamento (opcional): quando conectada, os dados passam a ser gravados
   // também num arquivo dentro dela — sem o limite de poucos MB do navegador. Se a pasta for
@@ -4359,6 +4364,7 @@ function ControleFretes() {
             if (dados.fretes) setFretes(dados.fretes);
             if (dados.custos) setCustos(dados.custos);
             if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.pessoais) setPessoais(dados.pessoais);
             if (dados.config) atualizarConfig(dados.config);
           }
           setPastaCarregada(true);
@@ -4392,7 +4398,7 @@ function ControleFretes() {
     const timer = setTimeout(async () => {
       try {
         setPastaStatus("sincronizando");
-        await pastaEscreverDados(pastaHandle, { fretes, custos, creditos, config, salvoEm: new Date().toISOString() });
+        await pastaEscreverDados(pastaHandle, { fretes, custos, creditos, pessoais, config, salvoEm: new Date().toISOString() });
         setPastaStatus("sincronizado");
       } catch (e) {
         setPastaStatus("erro");
@@ -4400,7 +4406,7 @@ function ControleFretes() {
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fretes, custos, creditos, config, pastaHandle, pastaCarregada]);
+  }, [fretes, custos, creditos, pessoais, config, pastaHandle, pastaCarregada]);
 
   // Dropbox: funciona em qualquer navegador (inclusive Safari no iPhone), porque conecta
   // direto na conta pela internet, sem depender de recurso nenhum do navegador.
@@ -4437,12 +4443,14 @@ function ControleFretes() {
             if (dados.fretes) setFretes(dados.fretes);
             if (dados.custos) setCustos(dados.custos);
             if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.pessoais) setPessoais(dados.pessoais);
             if (dados.config) atualizarConfig(dados.config);
           }
         } else if (dropboxTemDados && !navegadorTemDados) {
           if (dados.fretes) setFretes(dados.fretes);
           if (dados.custos) setCustos(dados.custos);
           if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.pessoais) setPessoais(dados.pessoais);
           if (dados.config) atualizarConfig(dados.config);
         }
       } catch (e) {}
@@ -4462,6 +4470,7 @@ function ControleFretes() {
           if (dados.fretes) setFretes(dados.fretes);
           if (dados.custos) setCustos(dados.custos);
           if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.pessoais) setPessoais(dados.pessoais);
           if (dados.config) atualizarConfig(dados.config);
         }
       } catch (e) {}
@@ -4483,7 +4492,7 @@ function ControleFretes() {
     const timer = setTimeout(async () => {
       try {
         setDropboxStatus("sincronizando");
-        await dropboxEscreverDados({ fretes, custos, creditos, config, salvoEm: new Date().toISOString() });
+        await dropboxEscreverDados({ fretes, custos, creditos, pessoais, config, salvoEm: new Date().toISOString() });
         setDropboxStatus("sincronizado");
       } catch (e) {
         setDropboxStatus("erro");
@@ -4491,7 +4500,7 @@ function ControleFretes() {
     }, 800);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fretes, custos, creditos, config, dropboxConectado, dropboxCarregado]);
+  }, [fretes, custos, creditos, pessoais, config, dropboxConectado, dropboxCarregado]);
 
   const desconectarDropbox = () => {
     dropboxDesconectar();
@@ -4523,6 +4532,7 @@ function ControleFretes() {
           if (dados.fretes) setFretes(dados.fretes);
           if (dados.custos) setCustos(dados.custos);
           if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.pessoais) setPessoais(dados.pessoais);
           if (dados.config) atualizarConfig(dados.config);
         }
       } else if (pastaTemDados && !navegadorTemDados) {
@@ -4531,6 +4541,7 @@ function ControleFretes() {
         if (dados.fretes) setFretes(dados.fretes);
         if (dados.custos) setCustos(dados.custos);
         if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.pessoais) setPessoais(dados.pessoais);
         if (dados.config) atualizarConfig(dados.config);
       }
       // Se a pasta estiver vazia (ou sem arquivo ainda), não pergunta nada — só passa a
@@ -4556,6 +4567,7 @@ function ControleFretes() {
           if (dados.fretes) setFretes(dados.fretes);
           if (dados.custos) setCustos(dados.custos);
           if (dados.creditos) setCreditos(dados.creditos);
+            if (dados.pessoais) setPessoais(dados.pessoais);
           if (dados.config) atualizarConfig(dados.config);
         }
         setPastaCarregada(true);
@@ -5826,6 +5838,40 @@ function ControleFretes() {
                   </div>
                 </div>
 
+                {pessoais.length > 0 && (() => {
+                  const porMes = {};
+                  pessoais.forEach(p => { const m = (p.data || "").slice(0,7); if (m) porMes[m] = (porMes[m] || 0) + (p.valor || 0); });
+                  const totPes = pessoais.reduce((s2, p) => s2 + (p.valor || 0), 0);
+                  const cats = {};
+                  pessoais.forEach(p => { const k = p.categoria || "Outros"; cats[k] = (cats[k] || 0) + (p.valor || 0); });
+                  const lista = Object.entries(cats).sort((a,b) => b[1]-a[1]);
+                  const maior = lista.length ? lista[0][1] : 0;
+                  return (
+                    <>
+                      <h3 className="text-sm font-semibold uppercase tracking-wide mt-2" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--texto)" }}>
+                        Saídas pessoais na conta da empresa
+                      </h3>
+                      <div className="rounded-md p-4 flex flex-col gap-3" style={{ background: "var(--superficie)", border: "1px solid var(--borda)" }}>
+                        <div className="flex items-baseline justify-between">
+                          <span className="text-xs" style={{ color: "var(--suave)" }}>{pessoais.length} lançamentos</span>
+                          <span className="text-lg font-bold" style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--texto)" }}>{currency(totPes)}</span>
+                        </div>
+                        {lista.map(([k, v]) => (
+                          <BarraValor key={k} rotulo={k} valor={v} maximo={maior} tom="var(--suave)" />
+                        ))}
+                        <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] pt-1" style={{ color: "var(--suave)", borderTop: "1px solid var(--linha)" }}>
+                          {Object.entries(porMes).sort().map(([m, v]) => (
+                            <span key={m}>{nomeMes(m)}: <b style={{ fontFamily: "'JetBrains Mono', monospace" }}>{currency(v)}</b></span>
+                          ))}
+                        </div>
+                        <div className="text-[11px]" style={{ color: "var(--acento)" }}>
+                          Não entram no resultado do caminhão. Estão aqui só para a conta bancária fechar.
+                        </div>
+                      </div>
+                    </>
+                  );
+                })()}
+
                 <h3 className="text-sm font-semibold uppercase tracking-wide mt-2" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--texto)" }}>
                   Maiores fornecedores
                 </h3>
@@ -6190,7 +6236,7 @@ function ControleFretes() {
           onClose={() => setShowSettings(false)}
           fretes={fretes}
           custos={custos}
-          onImport={(f, c) => { persistFretes(f); persistCustos(c); setShowSettings(false); }}
+          onImport={(f, c, pes) => { persistFretes(f); persistCustos(c); if (pes) persistPessoais(pes); setShowSettings(false); }}
           onRemoverDuplicados={(idsF, idsC) => {
             if (idsF && idsF.length) persistFretes(fretes.filter(f => idsF.indexOf(f.id) < 0));
             if (idsC && idsC.length) persistCustos(custos.filter(c => idsC.indexOf(c.id) < 0));
