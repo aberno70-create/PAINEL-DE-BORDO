@@ -165,7 +165,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v53";
+const APP_VERSION = "v54";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -887,6 +887,18 @@ function EmptyState({ text }) {
   );
 }
 
+const dBR = (iso) => (iso ? new Date(iso + "T00:00:00").toLocaleDateString("pt-BR") : "");
+const dCurta = (iso) => (iso ? dBR(iso).slice(0, 5) : "");
+// Pastilha de pago / em aberto usada na aba Viagens
+function FlagPg({ ok, data, rotOk, rotNao }) {
+  const cor = ok ? "var(--ok)" : "var(--perigo)";
+  return (
+    <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold"
+          style={{ color: cor, border: "1px solid " + cor, whiteSpace: "nowrap", fontFamily: "'Oswald', sans-serif" }}>
+      <b>{ok ? "\u2713" : "\u25CF"}</b>{ok ? (data ? dCurta(data) : (rotOk || "pago")) : (rotNao || "aberto")}
+    </span>
+  );
+}
 function Cel({ children, cor, mono, rot }) {
   return (
     <td data-rot={rot || ""} className="px-2 py-1.5 text-xs"
@@ -4980,6 +4992,7 @@ function ControleFretes() {
     { id: "fretes", label: "Fretes", icon: IconTruck },
     { id: "custos", label: "Custos", icon: IconFuel },
     { id: "financeiro", label: "Financeiro", icon: IconChartBars },
+    { id: "viagens", label: "Viagens", icon: IconTruck },
     { id: "entrada", label: "Entrada", icon: IconUpload },
     { id: "motorista", label: "Motorista", icon: IconUser },
     { id: "relatorios", label: "Relatórios", icon: IconFileText }
@@ -6044,6 +6057,258 @@ function ControleFretes() {
                 </div>
                 <div className="text-[11px]" style={{ color: "var(--suave)" }}>
                   Barra vermelha = ainda tem saldo em aberto com esse fornecedor.
+                </div>
+              </div>
+            );
+          })()
+        ) : tab === "viagens" ? (
+          (() => {
+            // ---------- Viagem por viagem, em linha, mes a mes ----------
+            // Cada custo cai na viagem cuja data de tiquete e a ultima <= a data do custo.
+            // O que vem antes do primeiro frete do mes fica na linha "Sem viagem".
+            const mesDe = (iso) => (iso || "").slice(0, 7);
+            const nomeMes = (m) => {
+              const [a, x] = m.split("-");
+              return ["jan","fev","mar","abr","mai","jun","jul","ago","set","out","nov","dez"][(+x) - 1] + "/" + a.slice(2);
+            };
+            const ordenados = fretes.slice().filter(f => f.dataTiquete)
+              .sort((a, b) => (a.dataTiquete === b.dataTiquete
+                ? (a.numeroContainer || "").localeCompare(b.numeroContainer || "")
+                : (a.dataTiquete < b.dataTiquete ? -1 : 1)));
+            const alvo = {};
+            ordenados.forEach(f => { alvo[f.id] = { combustivel: 0, pedagio: 0, manutencao: 0, fixo: 0 }; });
+            const soltos = {};
+            const bucket = (c) => c.tipo === "combustivel" ? "combustivel"
+                                : c.tipo === "pedagio" ? "pedagio"
+                                : c.tipo === "fixo" ? "fixo" : "manutencao";
+            custos.forEach(c => {
+              if (!c.data) return;
+              let dono = null;
+              if (c.freteId && alvo[c.freteId]) dono = c.freteId;
+              else {
+                for (let i = ordenados.length - 1; i >= 0; i--) {
+                  if (ordenados[i].dataTiquete <= c.data) { dono = ordenados[i].id; break; }
+                }
+              }
+              if (dono) alvo[dono][bucket(c)] += c.valor || 0;
+              else {
+                const m = mesDe(c.data);
+                soltos[m] = soltos[m] || { combustivel: 0, pedagio: 0, manutencao: 0, fixo: 0 };
+                soltos[m][bucket(c)] += c.valor || 0;
+              }
+            });
+
+            const meses = {};
+            ordenados.forEach(f => {
+              const m = mesDe(f.dataTiquete);
+              (meses[m] = meses[m] || []).push(f);
+            });
+            Object.keys(soltos).forEach(m => { meses[m] = meses[m] || []; });
+            const chaves = Object.keys(meses).sort().reverse();
+
+            const linhaDe = (f, i) => {
+              const g = alvo[f.id] || { combustivel: 0, pedagio: 0, manutencao: 0, fixo: 0 };
+              const frete = f.valorFrete || 0, com = f.comissaoMotorista || 0;
+              const desp = g.combustivel + g.pedagio + g.manutencao + g.fixo;
+              const res = frete - com - desp;
+              return { n: i + 1, f, frete, com, ...g, desp, res, pct: frete > 0 ? (res / frete) * 100 : 0 };
+            };
+            const comPaga = (f) => {
+              const cm = f.comissaoMotorista || 0;
+              if (cm <= 0) return true;
+              const ps = f.comissaoPagamentos || [];
+              const pg = ps.length ? ps.reduce((s2, p) => s2 + (p.valor || 0), 0)
+                                   : (f.statusComissao === "pago" ? cm : 0);
+              return pg >= cm - 0.005;
+            };
+            const ultimaComPg = (f) => {
+              const ps = f.comissaoPagamentos || [];
+              if (ps.length) return ps.slice().sort((a, b) => (a.data < b.data ? 1 : -1))[0].data;
+              return f.dataComissaoPaga || null;
+            };
+
+            // ---------- fornecedores diretos ----------
+            const diretos = custos.filter(c => c.pagoPor === "empresa")
+              .slice().sort((a, b) => (a.data < b.data ? 1 : -1));
+            const totDir = diretos.reduce((s2, c) => s2 + (c.valor || 0), 0);
+            const abertoDir = diretos.reduce((s2, c) => s2 + saldoPendenteCusto(c), 0);
+            const porForn = {};
+            diretos.forEach(c => {
+              const n = c.fornecedor || (c.tipo === "combustivel" ? c.posto : "") || "Sem fornecedor";
+              porForn[n] = porForn[n] || { nome: n, total: 0, aberto: 0, qtd: 0 };
+              porForn[n].total += c.valor || 0;
+              porForn[n].aberto += saldoPendenteCusto(c);
+              porForn[n].qtd += 1;
+            });
+            const listaForn = Object.values(porForn).sort((a, b) => b.aberto - a.aberto || b.total - a.total);
+
+            const CAB = ["#","Data","Container","Frete","Recebido","Comissão","Comissão paga","Combustível","Pedágio","Manutenção","Resultado","%"];
+
+            return (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <h3 className="text-sm font-semibold uppercase tracking-wide" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--texto)" }}>
+                    Viagem por viagem
+                  </h3>
+                  <div className="text-[11px] mt-1" style={{ color: "var(--suave)" }}>
+                    Uma linha por container, do mês mais novo para o mais antigo. Combustível, pedágio e manutenção entram na viagem que estava em curso na data do documento — o que o motorista adianta e o que a empresa paga direto, tudo junto. As pastilhas mostram o que já foi recebido da transportadora e o que já foi pago de comissão.
+                  </div>
+                </div>
+
+                {chaves.map(m => {
+                  const linhas = (meses[m] || []).map(linhaDe);
+                  const sol = soltos[m];
+                  const t = linhas.reduce((s2, l) => ({
+                    frete: s2.frete + l.frete, com: s2.com + l.com,
+                    combustivel: s2.combustivel + l.combustivel, pedagio: s2.pedagio + l.pedagio,
+                    manutencao: s2.manutencao + l.manutencao, fixo: s2.fixo + l.fixo, res: s2.res + l.res
+                  }), { frete: 0, com: 0, combustivel: 0, pedagio: 0, manutencao: 0, fixo: 0, res: 0 });
+                  if (sol) {
+                    t.combustivel += sol.combustivel; t.pedagio += sol.pedagio;
+                    t.manutencao += sol.manutencao; t.fixo += sol.fixo;
+                    t.res -= (sol.combustivel + sol.pedagio + sol.manutencao + sol.fixo);
+                  }
+                  const aReceberM = linhas.filter(l => l.f.status !== "pago").reduce((s2, l) => s2 + l.frete, 0);
+                  const margem = t.frete > 0 ? (t.res / t.frete) * 100 : 0;
+                  return (
+                    <div key={m} className="rounded-md" style={{ border: "1px solid var(--borda)", background: "var(--superficie)" }}>
+                      <div className="flex flex-wrap items-baseline justify-between gap-2 px-3 py-2" style={{ borderBottom: "1px solid var(--linha)" }}>
+                        <div className="flex items-baseline" style={{ gap: 8 }}>
+                          <span className="text-sm font-bold uppercase" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--acento)" }}>{nomeMes(m)}</span>
+                          <span className="text-[11px]" style={{ color: "var(--suave)" }}>{linhas.length} {linhas.length === 1 ? "viagem" : "viagens"}</span>
+                        </div>
+                        <div className="flex flex-wrap items-baseline text-[11px]" style={{ color: "var(--suave)", columnGap: 16, rowGap: 4 }}>
+                          <span>Frete <b style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--texto)" }}>{currency(t.frete)}</b></span>
+                          {aReceberM > 0.005 && <span>A receber <b style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--perigo)" }}>{currency(aReceberM)}</b></span>}
+                          <span>Resultado <b style={{ fontFamily: "'JetBrains Mono', monospace", color: t.res >= 0 ? "var(--ok)" : "var(--perigo)" }}>{currency(t.res)}</b></span>
+                          <span>Margem <b style={{ fontFamily: "'JetBrains Mono', monospace", color: margem >= 0 ? "var(--ok)" : "var(--perigo)" }}>{margem.toFixed(0)}%</b></span>
+                        </div>
+                      </div>
+                      <div className="rolagem-resp overflow-x-auto">
+                        <table className="w-full text-xs tab-resp" style={{ borderCollapse: "collapse", minWidth: 900 }}>
+                          <thead>
+                            <tr style={{ background: "var(--linha)" }}>
+                              {CAB.map(h => (
+                                <th key={h} className="px-2 py-2 text-left text-[10px] uppercase tracking-wider font-semibold"
+                                    style={{ color: "var(--suave)", fontFamily: "'Oswald', sans-serif", whiteSpace: "nowrap" }}>{h}</th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {sol && (
+                              <tr style={{ borderTop: "1px solid var(--linha)" }}>
+                                <Cel rot="#">—</Cel>
+                                <Cel rot="Data">—</Cel>
+                                <Cel rot="Container"><i style={{ color: "var(--suave)" }}>Sem viagem</i></Cel>
+                                <Cel rot="Frete" mono>—</Cel>
+                                <Cel rot="Recebido">—</Cel>
+                                <Cel rot="Comissão" mono>—</Cel>
+                                <Cel rot="Comissão paga">—</Cel>
+                                <Cel rot="Combustível" mono>{currency(sol.combustivel)}</Cel>
+                                <Cel rot="Pedágio" mono>{currency(sol.pedagio)}</Cel>
+                                <Cel rot="Manutenção" mono>{currency(sol.manutencao + sol.fixo)}</Cel>
+                                <Cel rot="Resultado" mono cor="var(--perigo)">{currency(-(sol.combustivel + sol.pedagio + sol.manutencao + sol.fixo))}</Cel>
+                                <Cel rot="%" mono>—</Cel>
+                              </tr>
+                            )}
+                            {linhas.map(l => (
+                              <tr key={l.f.id} style={{ borderTop: "1px solid var(--linha)" }}>
+                                <Cel rot="#" mono>{l.n}</Cel>
+                                <Cel rot="Data" mono>{dCurta(l.f.dataTiquete)}</Cel>
+                                <Cel rot="Container">{l.f.numeroContainer || "TBN"}</Cel>
+                                <Cel rot="Frete" mono>{currency(l.frete)}</Cel>
+                                <Cel rot="Recebido"><FlagPg ok={l.f.status === "pago"} data={l.f.dataPagamento} /></Cel>
+                                <Cel rot="Comissão" mono>{currency(l.com)}</Cel>
+                                <Cel rot="Comissão paga">{l.com > 0 ? <FlagPg ok={comPaga(l.f)} data={ultimaComPg(l.f)} /> : <span style={{ color: "var(--suave)" }}>—</span>}</Cel>
+                                <Cel rot="Combustível" mono>{l.combustivel > 0.005 ? currency(l.combustivel) : "—"}</Cel>
+                                <Cel rot="Pedágio" mono>{l.pedagio > 0.005 ? currency(l.pedagio) : "—"}</Cel>
+                                <Cel rot="Manutenção" mono>{(l.manutencao + l.fixo) > 0.005 ? currency(l.manutencao + l.fixo) : "—"}</Cel>
+                                <Cel rot="Resultado" mono cor={l.res >= 0 ? "var(--ok)" : "var(--perigo)"}>{currency(l.res)}</Cel>
+                                <Cel rot="%" mono cor={l.pct >= 0 ? "var(--ok)" : "var(--perigo)"}>{l.pct.toFixed(0)}%</Cel>
+                              </tr>
+                            ))}
+                            <tr style={{ borderTop: "2px solid var(--borda)", background: "var(--linha)" }}>
+                              <Cel rot="#"><b>Total</b></Cel>
+                              <Cel rot="Data">—</Cel>
+                              <Cel rot="Container">—</Cel>
+                              <Cel rot="Frete" mono><b>{currency(t.frete)}</b></Cel>
+                              <Cel rot="Recebido">—</Cel>
+                              <Cel rot="Comissão" mono><b>{currency(t.com)}</b></Cel>
+                              <Cel rot="Comissão paga">—</Cel>
+                              <Cel rot="Combustível" mono><b>{currency(t.combustivel)}</b></Cel>
+                              <Cel rot="Pedágio" mono><b>{currency(t.pedagio)}</b></Cel>
+                              <Cel rot="Manutenção" mono><b>{currency(t.manutencao + t.fixo)}</b></Cel>
+                              <Cel rot="Resultado" mono cor={t.res >= 0 ? "var(--ok)" : "var(--perigo)"}><b>{currency(t.res)}</b></Cel>
+                              <Cel rot="%" mono cor={margem >= 0 ? "var(--ok)" : "var(--perigo)"}><b>{margem.toFixed(0)}%</b></Cel>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                <h3 className="text-sm font-semibold uppercase tracking-wide mt-2" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--texto)" }}>
+                  Fornecedores diretos
+                </h3>
+                <div className="text-[11px] -mt-2" style={{ color: "var(--suave)" }}>
+                  Despesas que a empresa paga direto no fornecedor, sem passar pelo caixa do motorista. Total {currency(totDir)} · em aberto <b style={{ color: abertoDir > 0.005 ? "var(--perigo)" : "var(--ok)" }}>{currency(abertoDir)}</b>.
+                </div>
+                <div className="rolagem-resp overflow-x-auto rounded-md" style={{ border: "1px solid var(--borda)" }}>
+                  <table className="w-full text-xs tab-resp" style={{ borderCollapse: "collapse", minWidth: 680 }}>
+                    <thead>
+                      <tr style={{ background: "var(--linha)" }}>
+                        {["Data","Fornecedor","Descrição","Valor","Pago","Falta"].map(h => (
+                          <th key={h} className="px-2 py-2 text-left text-[10px] uppercase tracking-wider font-semibold"
+                              style={{ color: "var(--suave)", fontFamily: "'Oswald', sans-serif", whiteSpace: "nowrap" }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {diretos.map(c => {
+                        const falta = saldoPendenteCusto(c);
+                        const pg = valorPagoAcumulado(c);
+                        return (
+                          <tr key={c.id} style={{ borderTop: "1px solid var(--linha)" }}>
+                            <Cel rot="Data" mono>{dCurta(c.data)}</Cel>
+                            <Cel rot="Fornecedor">{c.fornecedor || (c.tipo === "combustivel" ? c.posto : "") || "Sem fornecedor"}</Cel>
+                            <Cel rot="Descrição"><span style={{ whiteSpace: "normal" }}>{(c.descricao || "").slice(0, 70)}</span></Cel>
+                            <Cel rot="Valor" mono>{currency(c.valor)}</Cel>
+                            <Cel rot="Pago"><FlagPg ok={falta <= 0.005} data={null} rotOk={pg > 0 ? "quitado" : "quitado"} rotNao={pg > 0.005 ? "parcial" : "a pagar"} /></Cel>
+                            <Cel rot="Falta" mono cor={falta > 0.005 ? "var(--perigo)" : "var(--ok)"}>{falta > 0.005 ? currency(falta) : "—"}</Cel>
+                          </tr>
+                        );
+                      })}
+                      {diretos.length === 0 && (
+                        <tr><Cel rot="Data">Nenhuma despesa paga direto pela empresa.</Cel></tr>
+                      )}
+                      <tr style={{ borderTop: "2px solid var(--borda)", background: "var(--linha)" }}>
+                        <Cel rot="Data"><b>Total</b></Cel>
+                        <Cel rot="Fornecedor">—</Cel>
+                        <Cel rot="Descrição">—</Cel>
+                        <Cel rot="Valor" mono><b>{currency(totDir)}</b></Cel>
+                        <Cel rot="Pago">—</Cel>
+                        <Cel rot="Falta" mono cor={abertoDir > 0.005 ? "var(--perigo)" : "var(--ok)"}><b>{currency(abertoDir)}</b></Cel>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <h3 className="text-sm font-semibold uppercase tracking-wide mt-2" style={{ fontFamily: "'Oswald', sans-serif", color: "var(--texto)" }}>
+                  Saldo por fornecedor direto
+                </h3>
+                <div className="rounded-md p-4 flex flex-col gap-2" style={{ background: "var(--superficie)", border: "1px solid var(--borda)" }}>
+                  {listaForn.map(fo => (
+                    <div key={fo.nome} className="flex flex-wrap items-baseline justify-between gap-2 py-1" style={{ borderBottom: "1px solid var(--linha)" }}>
+                      <span className="text-xs" style={{ color: "var(--texto)" }}>{fo.nome}</span>
+                      <span className="flex items-center text-[11px]" style={{ color: "var(--suave)", gap: 12 }}>
+                        <span>{fo.qtd} lançamento{fo.qtd > 1 ? "s" : ""}</span>
+                        <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "var(--texto)" }}>{currency(fo.total)}</span>
+                        <FlagPg ok={fo.aberto <= 0.005} rotOk="quitado" rotNao={currency(fo.aberto) + " em aberto"} />
+                      </span>
+                    </div>
+                  ))}
+                  {listaForn.length === 0 && <span className="text-sm" style={{ color: "var(--suave)" }}>Nada aqui ainda.</span>}
                 </div>
               </div>
             );
