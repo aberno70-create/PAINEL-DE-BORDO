@@ -165,7 +165,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v54";
+const APP_VERSION = "v55";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -3642,7 +3642,7 @@ function RelatorioMotoristaApp({ fretes, custos, creditos, motorista, config }) 
     const it = comissaoComoItem(f);
     comDev += it.valor; comPago += valorPagoAcumulado(it);
   });
-  const credito = (creditos || []).filter(c => c.tipo === "motorista").reduce((s, c) => s + (Number(c.valor) || 0), 0);
+  const credito = (creditos || []).filter(c => c.tipo === "motorista" && bate(c.chave)).reduce((s, c) => s + (Number(c.valor) || 0), 0);
 
   const Card = ({ titulo, valor, cor }) => (
     <div className="rounded-lg p-3" style={{ background: "var(--superficie)", border: "1px solid var(--borda)", minWidth: 150, flex: "1 1 150px" }}>
@@ -5817,6 +5817,19 @@ function ControleFretes() {
                 <div className="text-[11px]" style={{ color: "var(--suave)" }}>
                   A pagar ao motorista = {currency(comissaoAberta)} de comissão + {currency(aRessarcirMotorista)} de despesa que ele adiantou do próprio bolso.
                 </div>
+                {(() => {
+                  const adi = (creditos || []).filter(c => c.tipo === "motorista" && (Number(c.valor) || 0) > 0.004);
+                  if (!adi.length) return null;
+                  const porNome = {};
+                  adi.forEach(c => { const k = c.chave || "motorista"; porNome[k] = (porNome[k] || 0) + (Number(c.valor) || 0); });
+                  const tot = Object.values(porNome).reduce((s2, v) => s2 + v, 0);
+                  return (
+                    <div className="rounded-md px-3 py-2 text-[11px]" style={{ border: "1px solid var(--acento)", color: "var(--suave)" }}>
+                      <b style={{ color: "var(--acento)" }}>Adiantamento em poder do motorista: {currency(tot)}</b> — dinheiro já enviado que ainda não tem nota ou recibo para abater.{" "}
+                      {Object.entries(porNome).map(([k, v]) => k + " " + currency(v)).join(" · ")}. Assim que a despesa for lançada, o app abate sozinho.
+                    </div>
+                  );
+                })()}
 
                 {temParticular && (
                   <>
@@ -6215,7 +6228,15 @@ function ControleFretes() {
                               <tr key={l.f.id} style={{ borderTop: "1px solid var(--linha)" }}>
                                 <Cel rot="#" mono>{l.n}</Cel>
                                 <Cel rot="Data" mono>{dCurta(l.f.dataTiquete)}</Cel>
-                                <Cel rot="Container">{l.f.numeroContainer || "TBN"}</Cel>
+                                <Cel rot="Container">
+                                  {l.f.numeroContainer || "TBN"}
+                                  {l.f.motorista && config.motoristas[0] && l.f.motorista !== config.motoristas[0] && (
+                                    <span className="ml-1 px-1 py-0.5 rounded text-[9px] font-semibold"
+                                          style={{ color: "var(--acento)", border: "1px solid var(--acento)", fontFamily: "'Oswald', sans-serif" }}>
+                                      {String(l.f.motorista).split(" ")[0]}
+                                    </span>
+                                  )}
+                                </Cel>
                                 <Cel rot="Frete" mono>{currency(l.frete)}</Cel>
                                 <Cel rot="Recebido"><FlagPg ok={l.f.status === "pago"} data={l.f.dataPagamento} /></Cel>
                                 <Cel rot="Comissão" mono>{currency(l.com)}</Cel>
