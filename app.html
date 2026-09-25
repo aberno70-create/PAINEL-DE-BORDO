@@ -165,7 +165,7 @@ function LogoMark({ size = 28 }) {
    TOKENS / CONSTANTES
 =========================================================== */
 // Incrementar a cada nova versão publicada deste arquivo.
-const APP_VERSION = "v55";
+const APP_VERSION = "v56";
 const DEFAULT_CONFIG = { nomeEmpresa: "GVGS", clientePadrao: "MRS", motoristas: ["Douglas Roberto da Silva"], caminhoes: [], dropboxAppKey: "605q5upo3xlsfyq" };
 const PERCENTUAL_COMISSAO = 0.2;
 const ITENS_MANUTENCAO = ["Motor","Pneus","Freios","Suspensão","Elétrica","Revisão geral","Lataria / Funilaria","Troca de óleo","Outros"];
@@ -1459,7 +1459,7 @@ function SettingsModal({ onClose, fretes, custos, onImport, onRemoverDuplicados,
     reader.onload = () => {
       try {
         const parsed = JSON.parse(reader.result);
-        onImport(parsed.fretes || [], parsed.custos || [], parsed.pessoais || null, parsed.entradas || null);
+        onImport(parsed.fretes || [], parsed.custos || [], parsed.pessoais || null, parsed.entradas || null, parsed.creditos || null, parsed.config || null);
       } catch {
         alert("Não consegui ler esse arquivo de backup.");
       }
@@ -6681,7 +6681,7 @@ function ControleFretes() {
           onClose={() => setShowSettings(false)}
           fretes={fretes}
           custos={custos}
-          onImport={(f, c, pes, ent) => { persistFretes(f); persistCustos(c); if (pes) persistPessoais(pes); if (ent) persistEntradas(ent); setShowSettings(false); }}
+          onImport={(f, c, pes, ent, cre, cfg) => { persistFretes(f); persistCustos(c); if (pes) persistPessoais(pes); if (ent) persistEntradas(ent); if (cre) persistCreditos(cre); if (cfg) atualizarConfig({ ...config, ...cfg }); setShowSettings(false); }}
           onRemoverDuplicados={(idsF, idsC) => {
             if (idsF && idsF.length) persistFretes(fretes.filter(f => idsF.indexOf(f.id) < 0));
             if (idsC && idsC.length) persistCustos(custos.filter(c => idsC.indexOf(c.id) < 0));
